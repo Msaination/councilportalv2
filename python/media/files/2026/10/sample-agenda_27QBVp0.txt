@@ -1,0 +1,4 @@
+Emalahleni Council Portal — Sample Document
+
+This is a sample document created by the seed_portal command.
+Replace it with real council documents via the admin interface.
