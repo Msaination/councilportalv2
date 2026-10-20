@@ -63,5 +63,8 @@ Thumbs.db
 coverage.xml
 *.cover
 
+# Legacy reference (not part of production)
+php/
+
 # Docker
 *.pid
