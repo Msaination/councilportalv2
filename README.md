@@ -144,6 +144,21 @@ curl http://127.0.0.1:8000/api/categories/ \
 | `/api/files/<id>/download/` | GET | ACL-gated download + logging |
 | `/api/files/upload/` | POST | Upload new file |
 | `/api/files/<id>/replace/` | POST | Replace file payload |
+| `/api/files/<id>/share/` | POST | Create client share link (expiry + optional password) |
+| `/api/shared-links/` | GET/DELETE | List/revoke your share links |
+| `/api/shared/<token>/` | GET (public) | Share metadata (password-gated) |
+| `/api/shared/<token>/download/` | GET (public) | Public download/preview + logging |
+| `/api/teams/` | GET/POST | List your teams / create a team |
+| `/api/teams/<slug>/` | GET/PATCH/DELETE | Team detail, rename, delete (owner) |
+| `/api/teams/<slug>/members/` | GET/POST | List / add members |
+| `/api/teams/<slug>/members/<user_id>/` | DELETE | Remove a member |
+| `/api/teams/<slug>/switch/` | POST | Set the active workspace |
+| `/api/access/users/` | GET/POST | List users / create user (superadmin, default password) |
+| `/api/access/users/<id>/` | PATCH | Superadmin: capabilities; assigned editors: employee number |
+| `/api/profile/` | GET/PATCH | Own profile (username, email, employee no., cell, bio, avatar) |
+| `/api/profile/password/` | POST | Change own password (clears first-login requirement) |
+| `/api/meetings/` | GET/POST | List meetings (`?scope=mine`, `?date=YYYY-MM-DD`, `?include_past=1`) / schedule (staff) |
+| `/api/meetings/<id>/` | GET/PATCH/DELETE | Meeting detail / edit / delete (staff) |
 | `/api/comments/` | GET/POST | List/create comments |
 | `/api/ratings/` | GET/POST | List/upsert ratings |
 | `/api/admin/stats/summary/` | GET | Totals + top files |

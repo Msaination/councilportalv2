@@ -1,15 +1,15 @@
 # Emalahleni Council Portal v2 — Development Summary
 
-**Date:** October 20, 2026  
+**Date:** November 1, 2026  
 **Project:** NextGen DAM — SaaS Digital Asset Management Platform  
 **Developer:** GitHub Copilot (Poolside: Laguna S 2.1)  
-**Status:** MVP Complete — Ready for Production Hardening
+**Status:** MVP + Access Control, Profiles & Calendar Complete — Ready for Production Hardening
 
 ---
 
 ## 1. Executive Summary
 
-Built a full-stack Digital Asset Management (DAM) platform from scratch, migrating from a legacy Phoca Download Joomla component to a modern cloud-native architecture. The system provides a complete document repository for councillors and top management with ACL-based access control, file preview/playback, social features (comments/ratings), and a statistics dashboard.
+Built a full-stack Digital Asset Management (DAM) platform from scratch, migrating from a legacy Phoca Download Joomla component to a modern cloud-native architecture. The system provides a complete document repository for councillors and top management with ACL-based access control, file preview/playback, social features (comments/ratings), a statistics dashboard, client share links, multi-tenant teams, granular capabilities, self-service profiles, and a meetings calendar.
 
 ### Architecture Overview
 
@@ -67,7 +67,7 @@ Built a full-stack Digital Asset Management (DAM) platform from scratch, migrati
 
 6. **UploadLog** — Tracks every upload/replace (action: created/replaced)
 
-**16 API endpoints** — All verified working with JWT auth:
+**30+ API endpoints** — All verified working with JWT auth:
 
 | Endpoint | Method | Description |
 |---|---|---|
@@ -89,6 +89,17 @@ Built a full-stack Digital Asset Management (DAM) platform from scratch, migrati
 | `/api/ratings/` | GET/POST | List/upsert ratings |
 | `/api/admin/stats/summary/` | GET | Totals + top files |
 | `/api/admin/stats/downloads/` | GET | Paginated download logs |
+| `/api/files/<id>/share/` | POST | Create client share link (expiry + password) |
+| `/api/shared-links/` | GET/DELETE | List/revoke own share links |
+| `/api/shared/<token>/` | GET (public) | Share metadata (password-gated) |
+| `/api/teams/` | GET/POST | List/create workspace teams (`view_teams` capability) |
+| `/api/teams/<slug>/members/` | GET/POST | Team member management |
+| `/api/access/users/` | GET/POST | Superadmin: list/create users |
+| `/api/access/users/<id>/` | PATCH | Capabilities or employee number (assigned editors) |
+| `/api/profile/` | GET/PATCH | Own profile (avatar, cell, bio, identity) |
+| `/api/profile/password/` | POST | Change own password |
+| `/api/meetings/` | GET/POST | Calendar meetings (`?scope=mine`, `?date=YYYY-MM-DD`) |
+| `/api/meetings/<id>/` | GET/PATCH/DELETE | Meeting detail / edit / delete |
 
 ### Phase 3: Social Layer + ACL Refinement
 
@@ -176,27 +187,29 @@ Both servers are currently running:
 
 ---
 
-## 5. Next Steps (Recommended)
+## 5. Next Steps (Updated 1 November 2026)
 
-### Priority 1: Multi-Tenancy (Accounts App)
-Create an `accounts` app with User profiles, Teams/Workspaces, and Membership models. Filter all queries by team to isolate assets per organization.
+### Completed: Multi-Tenancy (Accounts App)
+Delivered: `Team`, `Membership`, and `UserProfile` models; team-scoped categories/files; active-workspace switching; team member management UI.
 
-### Priority 2: Client Sharing
-Add a `SharedLink` model with:
-- Time-limited URLs (expiry datetime)
-- Optional password protection
-- Download tracking per shared link
-- Public access endpoint (`/share/<token>/`)
+### Completed: Client Sharing
+Delivered: `SharedLink` (expiry + PBKDF2 password), public `/share/<token>` page, `/dashboard/shared` management, `share_files` capability, and per-category `is_shareable` policy that blocks confidential folders.
 
-### Priority 3: Production Docker Deployment
+### Priority 1: Production Docker Deployment
 ```bash
 cd python/
 docker compose up -d --build
 ```
-- Switch from SQLite to PostgreSQL
-- Add S3 storage backend (`django-storages`)
+- Fix the `frontend` image build (`pnpm` build-script approval for `unrs-resolver`)
+- Switch from SQLite to PostgreSQL for production
 - Set `DEBUG=0`, configure `ALLOWED_HOSTS`
 - Add nginx for media serving with `X-Accel-Redirect`
+
+### Priority 2: S3 Storage
+- Add `django-storages` + `boto3`; swap local media for S3.
+
+### Priority 3: CI/CD
+- GitHub Actions: run the 87-test backend suite and the Next.js build on every push.
 
 ### Priority 4: Advanced Features
 - Activity feed (audit trail of all actions)
@@ -204,12 +217,6 @@ docker compose up -d --build
 - File versioning (history of replaced files)
 - Search (full-text search via PostgreSQL `tsvector`)
 - Real-time notifications (WebSocket or polling)
-
-### Priority 5: Testing & CI
-- Unit tests for models + API endpoints
-- Integration tests for the full upload→download→comment→rate flow
-- CI/CD pipeline (GitHub Actions)
-- Docker health checks
 
 ---
 
@@ -267,4 +274,59 @@ curl -X POST http://127.0.0.1:8000/api/files/upload/ \
 
 ---
 
-*Prepared by GitHub Copilot on 2026-10-20*
+---
+
+## 8. Progress Update — 1 November 2026
+
+### Client sharing (shipped)
+- `SharedLink` model with unique token, expiry, PBKDF2 password, soft revoke
+- Public `/share/<token>` page with password gate + inline preview/download
+- `/dashboard/shared` management UI (copy link, revoke)
+- Gated by the `documents.share_files` capability **and** `Category.is_shareable`; existing links die immediately when a category becomes non-shareable
+
+### Multi-tenancy (shipped)
+- `accounts` app: `Team`, `Membership` (owner/admin/member), `UserProfile.active_team`
+- Team FK added to `Category`/`StoredFile`; visibility requires team membership
+- Team page (`/dashboard/team`) supports create, switch, add/remove members
+- Uploads automatically assign the uploader's active team
+
+### Capabilities & access control (shipped)
+- Superadmin-granted Django permissions: `view_teams`, `share_files`, `edit_employee_numbers`
+- `/dashboard/access` UI for creating users, toggling capabilities, editing employee numbers
+- Category ACL now cascades to files; ratings are ACL-checked; comments validate targets safely
+- Superadmin-only capability management; assigned editors can only change employee numbers
+
+### Profiles, employee numbers & first-login security (shipped)
+- `/dashboard/profile`: username, email, SA cell number (`0XXXXXXXXX`), bio (500 chars), avatar (≤2 MB), password change
+- Unique employee number: `S`-prefixed, max 7 chars; read-only for users, editable only by superadmin/assigned editors
+- New users are created with default password `Password#v2cp2026` and `must_change_password=True`
+- Forced first-login change: login redirects to the profile page; all normal APIs return 403 until the password is changed
+
+### Calendar application (shipped)
+- New `calendar_app` with `Meeting` (title, description, location, start/end, team, attendees, groups, related collection/document)
+- Month grid + upcoming sidebar (`/dashboard/calendar`), plus standalone `/calendar`
+- **My meetings / All meetings** filter; `?date=YYYY-MM-DD` day filter
+- Clickable dates → day view; clickable times → related document, collection, or meeting detail page
+- Staff-only create/delete; upcoming meetings card on the dashboard home
+
+### Quality & fixes
+- **87 backend tests** passing (ACL, uploads, downloads, social, sharing, teams, capabilities, profiles, calendar)
+- Fixed: local file download `JSON.parse` crash (now authenticated blob download)
+- Fixed: category ACL not cascading to files
+- Fixed: ratings could target invisible objects
+- Fixed: missing `JsonResponse` import and unsafe comment target handling
+- Fixed: calendar visibility leak for team-less attendee meetings; past-meeting detail/delete 404s
+- Frontend: `tsc` clean, ESLint 0 errors; logout clears tokens and hard-reloads; top-right user menu consistent across dashboard
+
+### Current service map
+| Service | URL |
+|---|---|
+| Frontend | http://localhost:3000 |
+| Dashboard | http://localhost:3000/dashboard |
+| Calendar (standalone) | http://localhost:3000/calendar |
+| Backend API | http://localhost:8000 |
+| Django admin | http://localhost:8000/admin/ (admin / admin123) |
+
+---
+
+*Prepared by GitHub Copilot on 2026-10-20; updated 2026-11-01*

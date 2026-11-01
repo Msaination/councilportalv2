@@ -1,13 +1,13 @@
 from django.contrib import admin
 from .models import (
-    Category, StoredFile, Comment, Rating, DownloadLog, UploadLog,
+    Category, StoredFile, SharedLink, Comment, Rating, DownloadLog, UploadLog,
 )
 
 
 @admin.register(Category)
 class CategoryAdmin(admin.ModelAdmin):
-    list_display = ('title', 'parent', 'is_published', 'ordering')
-    list_filter = ('is_published',)
+    list_display = ('title', 'parent', 'is_published', 'is_shareable', 'ordering')
+    list_filter = ('is_published', 'is_shareable')
     search_fields = ('title', 'slug', 'description')
     prepopulated_fields = {'slug': ('title',)}
     filter_horizontal = ('access_groups', 'access_users')
@@ -23,6 +23,16 @@ class StoredFileAdmin(admin.ModelAdmin):
     prepopulated_fields = {'slug': ('title',)}
     filter_horizontal = ('access_groups', 'access_users')
     raw_id_fields = ('owner',)
+
+
+@admin.register(SharedLink)
+class SharedLinkAdmin(admin.ModelAdmin):
+    list_display = ('__str__', 'file', 'created_by', 'expires_at',
+                    'is_revoked', 'created_at')
+    list_filter = ('is_revoked', 'created_at', 'expires_at')
+    search_fields = ('token', 'file__title', 'created_by__username')
+    raw_id_fields = ('file', 'created_by')
+    date_hierarchy = 'created_at'
 
 
 @admin.register(Comment)

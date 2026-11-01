@@ -6,24 +6,40 @@ ACL is enforced server-side on every endpoint via the model-level
 trust client-side permission checks.
 """
 
+from datetime import timedelta
+
 from django.contrib.contenttypes.models import ContentType
 from django.core.files.uploadedfile import UploadedFile
 from django.http import FileResponse, Http404, HttpResponseForbidden, JsonResponse
+from django.utils import timezone
 from django.views.decorators.csrf import ensure_csrf_cookie
-from rest_framework import serializers, viewsets, permissions, status
+from rest_framework import mixins, serializers, viewsets, permissions, status
 from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.response import Response
 
 import magic  # python-magic for MIME detection
 
+from accounts.models import UserProfile, get_active_team
+from accounts.permissions import CanShareFiles, PasswordChangeRequired
+
 from .models import (
-    Category, StoredFile, Comment, Rating, DownloadLog, UploadLog,
+    Category, StoredFile, SharedLink, Comment, Rating, DownloadLog, UploadLog,
 )
 from .serializers import (
-    CategoryTreeSerializer, StoredFileSerializer,
+    CategoryTreeSerializer, StoredFileSerializer, SharedLinkSerializer,
     CommentSerializer, RatingSerializer,
     DownloadLogSerializer, UploadLogSerializer,
 )
+
+
+def _client_ip(request):
+    forwarded = request.META.get('HTTP_X_FORWARDED_FOR')
+    if forwarded:
+        return forwarded.split(',')[0].strip()
+    return request.META.get('REMOTE_ADDR')
+
+
+DEFAULT_SHARE_EXPIRY_HOURS = 24 * 7
 
 
 # ─── Permissions ────────────────────────────────────────────
@@ -50,7 +66,9 @@ def _visible_categories(user):
 class CategoryViewSet(viewsets.ReadOnlyModelViewSet):
     """Root category tree (ACL-filtered)."""
     serializer_class = CategoryTreeSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [
+        permissions.IsAuthenticated, PasswordChangeRequired,
+    ]
     lookup_field = 'slug'
 
     def get_queryset(self):
@@ -94,7 +112,9 @@ class CategoryViewSet(viewsets.ReadOnlyModelViewSet):
 class StoredFileViewSet(viewsets.ReadOnlyModelViewSet):
     """Read-only files endpoint with download tracking."""
     serializer_class = StoredFileSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [
+        permissions.IsAuthenticated, PasswordChangeRequired,
+    ]
 
     def get_queryset(self):
         """Return all files — ACL filtering happens in get_object / list."""
@@ -135,7 +155,7 @@ class StoredFileViewSet(viewsets.ReadOnlyModelViewSet):
         DownloadLog.objects.create(
             file=file_obj,
             user=user if user.is_authenticated else None,
-            ip_address=self._client_ip(request),
+            ip_address=_client_ip(request),
         )
         file_obj.download_count += 1
         file_obj.save(update_fields=['download_count'])
@@ -152,11 +172,53 @@ class StoredFileViewSet(viewsets.ReadOnlyModelViewSet):
             return response
         raise Http404()
 
-    def _client_ip(self, request):
-        forwarded = request.META.get('HTTP_X_FORWARDED_FOR')
-        if forwarded:
-            return forwarded.split(',')[0].strip()
-        return request.META.get('REMOTE_ADDR')
+    # ─── Sharing ──────────────────────────────────────────────
+
+    @action(detail=True, methods=['post'], url_path='share',
+            permission_classes=[permissions.IsAuthenticated, CanShareFiles,
+                                PasswordChangeRequired])
+    def share(self, request, pk=None):
+        """Create a public share link with optional password + expiry."""
+        file_obj = self.get_object()
+        if not file_obj.category.is_shareable:
+            return Response(
+                {'error': 'Sharing is disabled for this category.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        expires_in_hours = request.data.get(
+            'expires_in_hours', DEFAULT_SHARE_EXPIRY_HOURS,
+        )
+
+        expires_at = None
+        if expires_in_hours not in (None, '', 0, '0'):
+            try:
+                hours = int(expires_in_hours)
+            except (TypeError, ValueError):
+                return Response(
+                    {'error': 'expires_in_hours must be an integer.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if hours < 0:
+                return Response(
+                    {'error': 'expires_in_hours cannot be negative.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            expires_at = timezone.now() + timedelta(hours=hours)
+
+        shared_link = SharedLink(
+            file=file_obj,
+            created_by=request.user,
+            expires_at=expires_at,
+        )
+        shared_link.set_password(request.data.get('password') or '')
+        shared_link.save()
+
+        return Response(
+            SharedLinkSerializer(
+                shared_link, context=self.get_serializer_context(),
+            ).data,
+            status=status.HTTP_201_CREATED,
+        )
 
     # ─── Upload / replace ─────────────────────────────────────
 
@@ -254,6 +316,7 @@ class StoredFileViewSet(viewsets.ReadOnlyModelViewSet):
             local_file=file_obj,
             mime_type=meta['mime_type'],
             filesize=meta['filesize'],
+            team=get_active_team(request.user),
             owner=request.user,
             is_published=True,
         )
@@ -291,6 +354,92 @@ class StoredFileViewSet(viewsets.ReadOnlyModelViewSet):
         return Response(StoredFileSerializer(obj, context={'request': request}).data)
 
 
+# ─── Shared links (management) ──────────────────────────────
+
+class SharedLinkViewSet(mixins.ListModelMixin,
+                        mixins.RetrieveModelMixin,
+                        mixins.DestroyModelMixin,
+                        viewsets.GenericViewSet):
+    """List/revoke share links owned by the current user (staff see all)."""
+    serializer_class = SharedLinkSerializer
+    permission_classes = [
+        permissions.IsAuthenticated, CanShareFiles, PasswordChangeRequired,
+    ]
+    lookup_field = 'token'
+
+    def get_queryset(self):
+        qs = SharedLink.objects.select_related('file', 'created_by')
+        if self.request.user.is_staff:
+            return qs
+        return qs.filter(created_by=self.request.user)
+
+    def perform_destroy(self, instance):
+        """Revoke instead of deleting so the audit trail survives."""
+        instance.is_revoked = True
+        instance.save(update_fields=['is_revoked'])
+
+
+def _get_active_share(token):
+    try:
+        shared_link = SharedLink.objects.select_related(
+            'file', 'file__category',
+        ).get(token=token)
+    except SharedLink.DoesNotExist:
+        raise Http404()
+    if not shared_link.is_active or not shared_link.file.category.is_shareable:
+        raise Http404()
+    return shared_link
+
+
+def _share_password_matches(shared_link, request):
+    if not shared_link.password_hash:
+        return True
+    supplied = (request.query_params.get('password') or
+                request.headers.get('X-Share-Password') or '')
+    return shared_link.check_password(supplied)
+
+
+@api_view(['GET'])
+@permission_classes([permissions.AllowAny])
+def shared_link_detail(request, token):
+    """Public metadata for a share link (password-gated when set)."""
+    shared_link = _get_active_share(token)
+    if not _share_password_matches(shared_link, request):
+        return Response({'password_required': True},
+                        status=status.HTTP_401_UNAUTHORIZED)
+    return Response(SharedLinkSerializer(shared_link).data)
+
+
+@api_view(['GET'])
+@permission_classes([permissions.AllowAny])
+def shared_link_download(request, token):
+    """Public download; logs the hit and serves inline for previews."""
+    shared_link = _get_active_share(token)
+    if not _share_password_matches(shared_link, request):
+        return Response({'password_required': True},
+                        status=status.HTTP_401_UNAUTHORIZED)
+
+    file_obj = shared_link.file
+    DownloadLog.objects.create(
+        file=file_obj, user=None, ip_address=_client_ip(request),
+    )
+    file_obj.download_count += 1
+    file_obj.save(update_fields=['download_count'])
+
+    if file_obj.storage == StoredFile.StorageKind.EXTERNAL:
+        return Response({'url': file_obj.external_url})
+
+    if not file_obj.local_file:
+        raise Http404()
+
+    inline = request.query_params.get('inline') in ('1', 'true', 'yes')
+    return FileResponse(
+        file_obj.local_file.open('rb'),
+        as_attachment=not inline,
+        filename=file_obj.local_file.name.split('/')[-1],
+    )
+
+
 # ─── Comments ───────────────────────────────────────────────
 
 class CommentViewSet(viewsets.ModelViewSet):
@@ -300,7 +449,9 @@ class CommentViewSet(viewsets.ModelViewSet):
     the requesting user — otherwise the comment is rejected.
     """
     serializer_class = CommentSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [
+        permissions.IsAuthenticated, PasswordChangeRequired,
+    ]
 
     def get_queryset(self):
         return Comment.objects.filter(is_approved=True).select_related('user')
@@ -315,9 +466,14 @@ class CommentViewSet(viewsets.ModelViewSet):
             return None, None
         try:
             ct = ContentType.objects.get(pk=ct_id)
-            obj = ct.get_object_for_this_type(pk=obj_id)
-            return ct, obj
-        except (ContentType.DoesNotExist, ct.model_class().DoesNotExist):
+        except ContentType.DoesNotExist:
+            return None, None
+        model = ct.model_class()
+        if model is None:
+            return None, None
+        try:
+            return ct, model.objects.get(pk=obj_id)
+        except model.DoesNotExist:
             return None, None
 
     def perform_create(self, serializer):
@@ -349,7 +505,9 @@ class RatingViewSet(viewsets.ModelViewSet):
     per user per object; ``create`` handles the upsert.
     """
     serializer_class = RatingSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [
+        permissions.IsAuthenticated, PasswordChangeRequired,
+    ]
 
     def get_queryset(self):
         return Rating.objects.filter(user=self.request.user)
@@ -359,7 +517,9 @@ class RatingViewSet(viewsets.ModelViewSet):
 
 class AdminStatsViewSet(viewsets.ReadOnlyModelViewSet):
     """Download / upload logs and summary totals — staff only."""
-    permission_classes = [permissions.IsAdminUser]
+    permission_classes = [
+        permissions.IsAdminUser, PasswordChangeRequired,
+    ]
 
     @action(detail=False, methods=['get'], url_path='downloads')
     def downloads(self, request):
@@ -397,7 +557,9 @@ class AdminStatsViewSet(viewsets.ReadOnlyModelViewSet):
 @api_view(['GET'])
 @permission_classes([permissions.IsAuthenticated])
 def current_user(request):
-    """Return the current authenticated user + their groups."""
+    """Return the current authenticated user + their groups and workspace."""
+    active_team = get_active_team(request.user)
+    profile, _ = UserProfile.objects.get_or_create(user=request.user)
     return Response({
         'id': request.user.id,
         'username': request.user.username,
@@ -406,6 +568,24 @@ def current_user(request):
         'email': request.user.email,
         'groups': [g.name for g in request.user.groups.all()],
         'is_staff': request.user.is_staff,
+        'avatar': (request.build_absolute_uri(profile.avatar.url)
+                   if profile.avatar else ''),
+        'capabilities': {
+            'view_teams': (request.user.is_superuser or
+                           request.user.has_perm('accounts.view_teams')),
+            'share_files': (request.user.is_superuser or
+                            request.user.has_perm('documents.share_files')),
+            'edit_employee_numbers': (
+                request.user.is_superuser or
+                request.user.has_perm('accounts.edit_employee_numbers')),
+            'manage_access': request.user.is_superuser,
+        },
+        'must_change_password': profile.must_change_password,
+        'active_team': ({
+            'id': active_team.id,
+            'name': active_team.name,
+            'slug': active_team.slug,
+        } if active_team else None),
     })
 
 

@@ -47,7 +47,9 @@ INSTALLED_APPS = [
     'django_filters',
     'corsheaders',
     # --- Portal apps ---
+    'accounts',
     'documents',
+    'calendar_app',
 ]
 
 MIDDLEWARE = [

@@ -7,7 +7,10 @@ Access control is group/user based (Phoca-style ACL) so that a category or file
 is visible only to whitelisted groups/users (or public if unrestricted).
 """
 
+import secrets
+
 from django.conf import settings
+from django.contrib.auth.hashers import check_password, make_password
 from django.core.validators import MinValueValidator, MaxValueValidator
 from django.db import models
 from django.utils import timezone
@@ -20,6 +23,11 @@ def _can_view(obj, user):
     if user.is_superuser:
         return True
     if not getattr(obj, 'is_published', True):
+        return False
+    # Team isolation: team-scoped objects are visible to members only
+    team_id = getattr(obj, 'team_id', None)
+    if team_id is not None and not user.team_memberships.filter(
+            team_id=team_id).exists():
         return False
     if obj.access_users.filter(pk=user.pk).exists():
         return True
@@ -43,6 +51,12 @@ class Category(models.Model):
     description = models.TextField(blank=True)
     image = models.ImageField(upload_to='categories/', blank=True)
 
+    # Multi-tenancy — blank means visible to every authenticated user
+    team = models.ForeignKey(
+        'accounts.Team', null=True, blank=True, on_delete=models.CASCADE,
+        related_name='categories',
+    )
+
     # ACL
     access_groups = models.ManyToManyField(
         'auth.Group', blank=True, related_name='category_access',
@@ -58,6 +72,11 @@ class Category(models.Model):
     is_published = models.BooleanField(default=True)
     ordering = models.PositiveIntegerField(default=0,
                                            help_text='Used by the frontend tree sort.')
+    is_shareable = models.BooleanField(
+        default=True,
+        help_text='Allow share links for files in this category. '
+                  'Disable for confidential folders.',
+    )
 
     class Meta:
         verbose_name_plural = 'categories'
@@ -92,6 +111,12 @@ class StoredFile(models.Model):
     slug = models.SlugField()
     description = models.TextField(blank=True)
 
+    # Multi-tenancy — blank means visible to every authenticated user
+    team = models.ForeignKey(
+        'accounts.Team', null=True, blank=True, on_delete=models.CASCADE,
+        related_name='files',
+    )
+
     storage = models.CharField(
         max_length=10, choices=StorageKind.choices,
         default=StorageKind.LOCAL,
@@ -124,7 +149,8 @@ class StoredFile(models.Model):
         return self.title
 
     def can_view(self, user):
-        return _can_view(self, user)
+        """Files inherit their category's ACL as well as their own."""
+        return _can_view(self, user) and _can_view(self.category, user)
 
     def can_download(self, user):
         """Alias kept for the API; same ACL gates download."""
@@ -141,6 +167,54 @@ class StoredFile(models.Model):
                 name='file_has_payload',
             ),
         ]
+
+
+# ─── Shared links (client sharing) ─────────────────────────
+
+def _generate_share_token():
+    return secrets.token_urlsafe(32)
+
+
+class SharedLink(models.Model):
+    """Time-limited, password-protected public link to a file."""
+    token = models.CharField(max_length=64, unique=True, editable=False,
+                             default=_generate_share_token)
+    file = models.ForeignKey(
+        StoredFile, on_delete=models.CASCADE, related_name='shared_links',
+    )
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, on_delete=models.SET_NULL,
+        related_name='shared_links',
+    )
+    password_hash = models.CharField(max_length=128, blank=True)
+    expires_at = models.DateTimeField(null=True, blank=True)
+    is_revoked = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        permissions = [
+            ('share_files', 'Can create and manage share links'),
+        ]
+
+    def __str__(self):
+        return f'Share of "{self.file}" ({self.token[:8]})'
+
+    @property
+    def is_expired(self):
+        return self.expires_at is not None and self.expires_at <= timezone.now()
+
+    @property
+    def is_active(self):
+        return not self.is_revoked and not self.is_expired
+
+    def set_password(self, raw_password):
+        self.password_hash = make_password(raw_password) if raw_password else ''
+
+    def check_password(self, raw_password):
+        if not self.password_hash:
+            return True
+        return check_password(raw_password or '', self.password_hash)
 
 
 # ─── Comments (generic FK — files AND categories) ──────────

@@ -4,6 +4,8 @@ A cloud-native Digital Asset Management solution: **Create once, reimagine every
 
 **Stack**: React Next.js (Server Actions + Turbopack) · Django REST Framework (JWT) · PostgreSQL · Shadcn UI · Tailwind CSS · Docker
 
+**Last updated:** 1 November 2026
+
 ---
 
 ## Architecture
@@ -29,8 +31,133 @@ A cloud-native Digital Asset Management solution: **Create once, reimagine every
 | **Multi-tenancy** | Teams/workspaces with isolated asset storage |
 | **Client Sharing** | Time-limited, password-protected share links |
 | **Social** | Comments, ratings (1–5 stars), activity feeds |
+| **Profiles** | Self-service username, email, SA cell number, avatar, bio, password change |
+| **Calendar** | Meetings month view, My/All filter, day drill-down, links to collections/documents |
+| **Access control** | Superadmin-granted capabilities, employee numbers, forced first-login password change |
 | **Data Protection** | RBAC, audit logs, file encryption at rest (planned) |
 | **Admin Panel** | Statistics dashboard, user/team management, audit trail |
+
+---
+
+## Access Model — Accounts, Authentication & Authorization
+
+Three separate questions, three separate layers. Keep them separate or the system becomes confusing:
+
+- **Authentication** = *who you are* (login, JWT tokens).
+- **Accounts / tenancy** = *where you belong* (teams, membership, active workspace).
+- **Authorization** = *what you may do* (capabilities, folder ACLs, team roles).
+
+```
+Login (AuthN) → Identity (User)
+                    │
+        ┌───────────┴────────────┐
+        │                        │
+  Accounts/tenancy         Authorization
+  (where you work)         (what you can do)
+  Team + Membership        ├─ Capabilities (feature switches)
+  UserProfile.active_team  ├─ Team membership (data partition)
+                           ├─ Category ACL (folder access)
+                           └─ Team role (team admin only)
+```
+
+### The four authorization layers
+
+| Concept | Question it answers | Implemented by | Configured in |
+|---|---|---|---|
+| **Authentication** | "Who is this request?" | SimpleJWT + session auth, `IsAuthenticated` | `/login`, `frontend/lib/api.ts` |
+| **Accounts / tenancy** | "Which workspace do I belong to?" | `Team`, `Membership`, `UserProfile` | `/dashboard/team`, `python/accounts/models.py` |
+| **Capabilities** | "Which *features* may I use?" | Django permissions `accounts.view_teams`, `documents.share_files`, `accounts.edit_employee_numbers`; `manage_access` = superuser | `/dashboard/access`, Django admin |
+| **Content ACL** | "Which *folders/assets* may I see?" | `Category.access_groups/access_users`, per-file equivalents, `Category.is_shareable` | Django admin → Categories/Files |
+| **Team role** | "May I administer this team?" | `Membership.role` = owner / admin / member | `/dashboard/team` |
+| **Platform admin** | "May I do anything?" | `is_superuser` (bypass), `is_staff` (stats) | Django admin |
+
+**Key separation:** Django **Groups** ("Councillors", "TopManagement") are *content roles* used only by the Category ACL. **Teams** are *data partitions*. A group never grants team access, and a team role never grants extra folder access.
+
+### Decision order (single source of truth)
+
+Every category/file read in `python/documents/models.py` runs:
+
+```
+1. superuser?                  → allow
+2. is_published?               → else deny
+3. object.team is set?         → user must be a member of that team
+4. user whitelisted on object? → allow
+5. object has access_groups?   → user must be in ≥1 of them
+6. otherwise                   → allow (all members of the team)
+```
+
+Then:
+
+| Action | Extra rule |
+|---|---|
+| **View/download file** | file ACL **and** its category ACL must both pass (cascade) |
+| **Create share link** | `share_files` capability **and** `category.is_shareable=True` **and** view access |
+| **Public share link** | token + optional password — intentionally bypasses login/ACL, so the gates above matter |
+| **View Teams** | `view_teams` capability |
+| **Manage team members** | superuser, or `owner`/`admin` membership |
+| **Manage capabilities** | superuser only |
+
+Effective rules:
+
+```
+can_view  = superuser OR (published AND in_team AND folder_acl AND file_acl)
+can_share = (superuser OR share_files) AND category.is_shareable AND can_view
+can_admin = superuser OR membership.role ∈ {owner, admin}
+```
+
+### Worked example
+
+Setup: Team **Emalahleni Council**; groups `Councillors`, `Councillors-Finance`; folder
+`Council Meetings/Annexures` limited to `Councillors-Finance` with `is_shareable=False`.
+
+| Step | alice (Finance group) | bob (Councillors) | carol (other team) |
+|---|---|---|---|
+| Authenticated | ✅ | ✅ | ✅ |
+| Published | ✅ | ✅ | ✅ |
+| Team member | ✅ | ✅ | ❌ → **404** |
+| Category ACL | ✅ | ❌ → **404** | — |
+| Result | **sees it** | **404** | **404** |
+
+alice's attempt to create a share link → **403**, even with `share_files`, because the category is not shareable.
+
+### Modelling subgroups
+
+Django groups are **flat** — there is no native nesting. Use:
+
+- **Folder hierarchy** → the Category tree (`Council Meetings > Annexures > 2026 Budget`).
+- **Role hierarchy** → separate flat groups (`Councillors`, `Councillors-Finance`, `Councillors-Finance-Budget`).
+- **Access inheritance** → grant groups on the highest folder possible; the cascade reaches files. Add users to every group whose access they need.
+- A true nested-group model would require a new `GroupHierarchy` model — only if committees outgrow flat groups.
+
+Rule of thumb: **hierarchy lives in the folder tree, not in the group tree.**
+
+### Who configures what
+
+| Task | Who | Where |
+|---|---|---|
+| Create users (with employee number + default password) | Superadmin | `/dashboard/access` |
+| Edit employee numbers | Superadmin or users granted `edit_employee_numbers` | `/dashboard/access` |
+| Create users/groups, assign users to groups | Superadmin | Django admin |
+| Grant `view_teams` / `share_files` | Superadmin | `/dashboard/access` |
+| Create teams, add/remove members, switch workspace | Superadmin, team owner/admin | `/dashboard/team` |
+| Set folder visibility, mark confidential (`is_shareable`) | Superadmin | Django admin → Categories |
+| Create share links for non-confidential assets | Anyone with `share_files` | Asset detail page |
+
+### Caveats
+
+1. **`active_team` is a default, not a restriction.** Reads use the union of a user's team memberships; uploads use the active team. To enforce "one workspace at a time", compare against `get_active_team(user)` in `_can_view`.
+2. **Legacy `team = NULL` content is visible to every authenticated user** — assign existing content to a team for full isolation.
+3. **No ACL on a category = visible to all members of that team.**
+4. **Individual whitelist (`access_users`) beats group restriction.**
+5. **Share links are bearer tokens** — revoke them from `/dashboard/shared`; disabling `is_shareable` kills existing links immediately.
+6. **`is_staff` sees global statistics; `is_superuser` bypasses ACL and manages access** — keep the two distinct.
+
+### Rules that keep it coherent
+
+1. **Teams partition data** — never use a team to express a role.
+2. **Groups express content roles** — never use a group to grant features.
+3. **Capabilities express features** — never encode them in team roles or folder ACLs.
+4. **Folder ACL expresses sensitivity** — grant at the highest folder, mark confidential folders non-shareable.
 
 ---
 
@@ -54,6 +181,13 @@ All 8 phases + dashboard UI complete. Full stack running and verified.
 | 6 (Preview Polish) | Content-type resolution, comments fetch | ✅ Complete |
 | 7 (Admin Stats) | Stats endpoints + dashboard home | ✅ Complete |
 | 8 (Hardening) | JWT auth, seed_portal command, Docker media | ✅ Complete |
+| Client sharing | `SharedLink` (expiry + password), public share page, `/dashboard/shared` | ✅ Complete |
+| Multi-tenancy | `accounts` app: Team/Membership/UserProfile, team-scoped assets, `/dashboard/team` | ✅ Complete |
+| Capabilities | Superadmin grants `view_teams` / `share_files`; per-category sharing policy (`is_shareable`) blocks confidential folders | ✅ Complete |
+| User profiles | Self-service username, email, SA cell number, bio, avatar upload, password change | ✅ Complete |
+| Employee numbers | Unique `S`-prefixed (7 chars), editable only by superadmin/assigned editors; new users get default password + forced first-login change | ✅ Complete |
+| Calendar | Meetings month view + sticky upcoming sidebar; `/dashboard/calendar` and standalone `/calendar`; My/All filter; clickable dates → day view; meeting times link to related collection/document/meeting; staff CRUD | ✅ Complete |
+| Tests | 87 backend tests (ACL, uploads, sharing, teams, capabilities, profiles, calendar) | ✅ Complete |
 | Dashboard UI | Sidebar, header, asset/collection pages | ✅ Complete |
 
 ### Running Services
@@ -61,17 +195,16 @@ All 8 phases + dashboard UI complete. Full stack running and verified.
 | Service | URL |
 |---|---|
 | Frontend (Next.js 16) | http://localhost:3000 |
+| Standalone Calendar | http://localhost:3000/calendar |
 | Backend (Django 6 + DRF) | http://127.0.0.1:8000 |
 | Admin | http://127.0.0.1:8000/admin/ (admin/admin123) |
 | JWT Login | POST http://127.0.0.1:8000/api/auth/token/ |
 
 ### Next Steps (when resuming)
 
-1. **Multi-tenancy** — `accounts` app with Team/User profile models
-2. **Client sharing** — `SharedLink` model with expiry + password
-3. **Production Docker** — `docker compose up -d --build`
-4. **S3 storage** — `django-storages` + `boto3`
-5. **Tests + CI/CD** — Unit/integration tests, GitHub Actions
+1. **Production Docker** — fix frontend image build (`pnpm` build-script approval)
+2. **S3 storage** — `django-storages` + `boto3`
+3. **CI/CD** — GitHub Actions running `python manage.py test` + `next build`
 
 ---
 
@@ -168,6 +301,13 @@ def can_access(obj, user) -> bool:
 - Groups/users set → whitelist only.
 - Category ACL **cascades**: a file is visible only if the user can access the
   category **and** the file.
+- Team isolation: objects with a `team` are visible only to that team's members;
+  blank team means shared with every authenticated user.
+- Share links require the `documents.share_files` capability, **and** the file's
+  category must have `is_shareable=True`. Confidential folders such as
+  "Annexures" should be marked non-shareable; existing links die immediately.
+- Capabilities (`accounts.view_teams`, `documents.share_files`) are granted only
+  by the superadmin via `/dashboard/access` or Django admin.
 - Django groups double as council roles: `Councillors`, `TopManagement`,
   `Admin`. No `Public` group — authenticated users without explicit ACL restrictions are treated as public to published content.
 
@@ -283,8 +423,6 @@ Key behaviours:
 
 ## 6. Immediate Next Steps
 
-1. `django-admin startapp documents` + add to `INSTALLED_APPS` with
-   `rest_framework`, `django_filters`.
-2. Write models above → migrate.
-3. Register in admin → create groups + test categories.
-4. Build serializers/views per Phase 2.
+1. **Production Docker** — fix the frontend image build (pnpm build-script approval) and run `docker compose up -d --build`.
+2. **CI/CD** — GitHub Actions running `python manage.py test` and the Next.js build.
+3. **S3 storage** — swap local media for `django-storages` + `boto3` when needed.

@@ -43,18 +43,22 @@ class Command(BaseCommand):
         if options['superuser']:
             self._seed_superuser()
 
+        self._seed_team()
+
         self.stdout.write(self.style.SUCCESS('Portal seeded successfully.'))
 
     # ─── Seeders ─────────────────────────────────────────────
 
     def _clear(self):
         from django.contrib.auth.models import Group
+        from accounts.models import Team
         from ...models import Comment, Rating, DownloadLog
         Comment.objects.all().delete()
         Rating.objects.all().delete()
         DownloadLog.objects.all().delete()
         StoredFile.objects.all().delete()
         Category.objects.all().delete()
+        Team.objects.all().delete()
         Group.objects.filter(
             name__in=['Councillors', 'TopManagement', 'Admin'],
         ).delete()
@@ -184,6 +188,32 @@ class Command(BaseCommand):
                 action=UploadLog.Action.CREATED,
             )
             self.stdout.write(self.style.SUCCESS(f'Created external file: {f.title}'))
+
+    def _seed_team(self):
+        """Create a default workspace and make the dev superuser its owner."""
+        from accounts.models import Membership, Team, UserProfile
+
+        admin = User.objects.filter(username='admin').first()
+        if admin is None:
+            return
+
+        team, created = Team.objects.get_or_create(
+            slug='emalahleni-council',
+            defaults={'name': 'Emalahleni Council', 'created_by': admin},
+        )
+        Membership.objects.get_or_create(
+            team=team, user=admin,
+            defaults={'role': Membership.Role.OWNER},
+        )
+        profile, _ = UserProfile.objects.get_or_create(user=admin)
+        if profile.active_team_id is None:
+            profile.active_team = team
+            profile.save(update_fields=['active_team'])
+
+        if created:
+            self.stdout.write(self.style.SUCCESS(
+                f'Created team: {team.name} ({team.slug})'
+            ))
 
     def _seed_superuser(self):
         if User.objects.filter(username='admin').exists():

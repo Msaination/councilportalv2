@@ -58,6 +58,9 @@ Thumbs.db
 *.swo
 *~
 
+# Office lock files
+~$*
+
 # Coverage
 .coverage
 coverage.xml

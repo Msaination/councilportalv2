@@ -17,7 +17,7 @@ from django.db.models import Avg
 from rest_framework import serializers
 
 from .models import (
-    Category, StoredFile, Comment, Rating, DownloadLog, UploadLog,
+    Category, StoredFile, SharedLink, Comment, Rating, DownloadLog, UploadLog,
 )
 
 User = get_user_model()
@@ -143,6 +143,39 @@ class StoredFileSerializer(serializers.ModelSerializer):
         ).count()
 
 
+# ─── Shared link ────────────────────────────────────────────
+
+class SharedLinkSerializer(serializers.ModelSerializer):
+    file = serializers.SerializerMethodField()
+    created_by = UserSerializer(read_only=True)
+    has_password = serializers.SerializerMethodField()
+    is_active = serializers.BooleanField(read_only=True)
+
+    class Meta:
+        model = SharedLink
+        fields = ('token', 'file', 'created_by', 'created_at', 'expires_at',
+                  'has_password', 'is_active')
+
+    def get_has_password(self, obj):
+        return bool(obj.password_hash)
+
+    def get_file(self, obj):
+        file_obj = obj.file
+        name = obj.file.external_url or (
+            obj.file.local_file.name if obj.file.local_file else ''
+        )
+        return {
+            'id': file_obj.id,
+            'title': file_obj.title,
+            'description': file_obj.description,
+            'storage': file_obj.storage,
+            'external_url': file_obj.external_url,
+            'filesize': file_obj.filesize,
+            'mime_type': file_obj.mime_type,
+            'preview_kind': preview_kind(name),
+        }
+
+
 # ─── Comment ────────────────────────────────────────────────
 
 class CommentSerializer(serializers.ModelSerializer):
@@ -170,6 +203,16 @@ class RatingSerializer(serializers.ModelSerializer):
 
     def create(self, validated):
         request = self.context['request']
+        target_model = validated['content_type'].model_class()
+        if target_model is None:
+            raise serializers.ValidationError('Invalid target object.')
+        try:
+            target = target_model.objects.get(pk=validated['object_id'])
+        except target_model.DoesNotExist:
+            raise serializers.ValidationError('Target object does not exist.')
+        if hasattr(target, 'can_view') and not target.can_view(request.user):
+            raise serializers.ValidationError('You cannot rate this object.')
+
         validated['user'] = request.user
         obj, _ = Rating.objects.update_or_create(
             content_type=validated['content_type'],
