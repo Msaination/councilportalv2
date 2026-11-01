@@ -419,6 +419,26 @@ Key behaviours:
 - Seed: management command `seed_portal` creating groups (Councillors,
   TopManagement, Admin), sample categories/files, and a superuser.
 
+### Git repositories & branches
+
+The project uses **two repositories**:
+
+| Repository | Contents | Branches |
+|---|---|---|
+| [councilportalv2](https://github.com/Msaination/councilportalv2) | Django backend (`python/`), docs, and the frontend submodule pointer | `main`, `staging` |
+| [councilportalv2-frontend](https://github.com/Msaination/councilportalv2-frontend) | Next.js UI (`frontend/`) | `main`, `staging` |
+
+- `main` = production-ready; `staging` = pre-production integration.
+- The parent repo pins an **exact frontend commit** through the submodule, so
+  each parent branch defines its precise backend + UI deployment.
+- Current state: parent `main`/`staging` at `b01c14a`; frontend `main`/`staging`
+  at `50703f6`.
+- Deploy staging:
+  `git clone --recurse-submodules -b staging https://github.com/Msaination/councilportalv2.git`
+- Frontend change flow: commit/push on frontend `staging`, then `git add frontend`
+  in the parent `staging` branch and commit the bumped pointer. Promote the same
+  way into `main`.
+
 ---
 
 ## 6. Immediate Next Steps

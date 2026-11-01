@@ -329,4 +329,48 @@ curl -X POST http://127.0.0.1:8000/api/files/upload/ \
 
 ---
 
+## 9. Repository & Branching
+
+The project uses two Git repositories with matching branch models:
+
+| Repository | Contents | Branches |
+|---|---|---|
+| [councilportalv2](https://github.com/Msaination/councilportalv2) | Django backend (`python/`), docs, frontend submodule pointer | `main`, `staging` |
+| [councilportalv2-frontend](https://github.com/Msaination/councilportalv2-frontend) | Next.js UI (`frontend/`) | `main`, `staging` |
+
+- `main` = production-ready; `staging` = pre-production integration.
+- The parent repo pins an exact frontend commit via the submodule, so each
+  parent branch fully defines its backend + UI deployment.
+- Current state: parent `main`/`staging` at `b01c14a`; frontend `main`/`staging`
+  at `50703f6`.
+
+### Frontend change flow (staging)
+```bash
+cd frontend && git switch staging
+# edit, commit, push
+git push origin staging
+cd .. && git add frontend && git commit -m "chore: bump frontend (staging)"
+git push origin staging
+```
+
+### Promote staging to main
+```bash
+git -C frontend switch main
+git -C frontend merge --ff-only staging
+git -C frontend push origin main
+
+git switch main
+git add frontend
+git commit -m "chore: bump frontend for main"
+git push origin main
+```
+
+### Deploy staging
+```bash
+git clone --recurse-submodules -b staging \
+  https://github.com/Msaination/councilportalv2.git
+```
+
+---
+
 *Prepared by GitHub Copilot on 2026-10-20; updated 2026-11-01*
