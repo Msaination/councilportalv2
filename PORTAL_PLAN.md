@@ -431,8 +431,8 @@ The project uses **two repositories**:
 - `main` = production-ready; `staging` = pre-production integration.
 - The parent repo pins an **exact frontend commit** through the submodule, so
   each parent branch defines its precise backend + UI deployment.
-- Current state: parent `main`/`staging` at `b01c14a`; frontend `main`/`staging`
-  at `50703f6`.
+- Current state: both parent branches pin frontend `50703f6`; the frontend
+  `main` and `staging` branches are also at `50703f6`.
 - Deploy staging:
   `git clone --recurse-submodules -b staging https://github.com/Msaination/councilportalv2.git`
 - Frontend change flow: commit/push on frontend `staging`, then `git add frontend`

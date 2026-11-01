@@ -341,8 +341,8 @@ The project uses two Git repositories with matching branch models:
 - `main` = production-ready; `staging` = pre-production integration.
 - The parent repo pins an exact frontend commit via the submodule, so each
   parent branch fully defines its backend + UI deployment.
-- Current state: parent `main`/`staging` at `b01c14a`; frontend `main`/`staging`
-  at `50703f6`.
+- Current state: both parent branches pin frontend `50703f6`; the frontend
+  `main` and `staging` branches are also at `50703f6`.
 
 ### Frontend change flow (staging)
 ```bash
