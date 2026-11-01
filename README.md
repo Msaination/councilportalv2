@@ -12,6 +12,7 @@ A full-stack Digital Asset Management (DAM) platform for municipal councils, bui
 - [Project Structure](#project-structure)
 - [Environment Variables](#environment-variables)
 - [Docker Deployment](#docker-deployment)
+- [Branching & Deployment](#branching--deployment)
 - [License](#license)
 
 ---
@@ -285,6 +286,66 @@ Services:
 | **Frontend** | http://localhost:3000 | Next.js frontend |
 | **DB** | localhost:5433 | PostgreSQL 15 |
 | **Adminer** | http://localhost:8080 | Database admin UI |
+
+---
+
+## Branching & Deployment
+
+The project spans **two Git repositories**:
+
+| Repository | Contents |
+|---|---|
+| `councilportalv2` | Django backend (`python/`), docs, and the `frontend` submodule pointer |
+| `councilportalv2-frontend` | Next.js UI (`frontend/`) |
+
+Both repositories use the same branch model:
+
+| Branch | Purpose |
+|---|---|
+| `main` | Production-ready code |
+| `staging` | Pre-production / integration testing |
+
+The parent repo pins an **exact frontend commit** through the submodule, so each parent branch controls precisely which UI commit it deploys.
+
+### Frontend change flow (staging)
+```bash
+git switch staging
+git submodule update --init --recursive
+
+cd frontend
+git switch staging
+# edit, commit, and push the UI changes
+git push origin staging
+
+cd ..
+git add frontend
+git commit -m "chore: bump frontend (staging)"
+git push origin staging
+```
+
+### Promote staging to main
+```bash
+# 1. Promote the UI
+git -C frontend switch main
+git -C frontend merge --ff-only staging
+git -C frontend push origin main
+
+# 2. Record the new UI commit in the parent repo
+git switch main
+git add frontend
+git commit -m "chore: bump frontend for main"
+git push origin main
+```
+
+### Deploy staging
+```bash
+git clone --recurse-submodules -b staging \
+  https://github.com/Msaination/councilportalv2.git
+
+# Existing clone:
+git switch staging
+git submodule update --init --recursive
+```
 
 ---
 
