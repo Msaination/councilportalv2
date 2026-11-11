@@ -12,6 +12,7 @@ from django.contrib.contenttypes.models import ContentType
 from django.core.files.uploadedfile import UploadedFile
 from django.http import FileResponse, Http404, HttpResponseForbidden, JsonResponse
 from django.utils import timezone
+from django.utils.text import slugify
 from django.views.decorators.csrf import ensure_csrf_cookie
 from rest_framework import mixins, serializers, viewsets, permissions, status
 from rest_framework.decorators import action, api_view, permission_classes
@@ -20,7 +21,9 @@ from rest_framework.response import Response
 import magic  # python-magic for MIME detection
 
 from accounts.models import UserProfile, get_active_team
-from accounts.permissions import CanShareFiles, PasswordChangeRequired
+from accounts.permissions import (
+    CanManageContent, CanShareFiles, PasswordChangeRequired,
+)
 
 from .models import (
     Category, StoredFile, SharedLink, Comment, Rating, DownloadLog, UploadLog,
@@ -71,6 +74,15 @@ class CategoryViewSet(viewsets.ReadOnlyModelViewSet):
     ]
     lookup_field = 'slug'
 
+    def get_permissions(self):
+        """Reads: any authenticated user. Create/remove: admin or staff."""
+        if self.request.method in permissions.SAFE_METHODS:
+            return super().get_permissions()
+        return [
+            permissions.IsAuthenticated(), CanManageContent(),
+            PasswordChangeRequired(),
+        ]
+
     def get_queryset(self):
         return Category.objects.filter(is_published=True).prefetch_related(
             'access_groups', 'access_users', 'children',
@@ -95,6 +107,73 @@ class CategoryViewSet(viewsets.ReadOnlyModelViewSet):
             raise Http404()
         return obj
 
+    def retrieve(self, request, slug=None):
+        """Detail view: tree fields plus ACL-filtered direct files."""
+        category = self.get_object()  # ACL-checked, 404 if not visible
+        data = CategoryTreeSerializer(category,
+                                      context={'request': request}).data
+        visible = [f for f in category.files.filter(is_published=True)
+                   if f.can_view(request.user)]
+        data['files'] = StoredFileSerializer(
+            visible, many=True, context={'request': request},
+        ).data
+        return Response(data)
+
+    # ─── Create / remove (admin & staff) ─────────────────────
+
+    def create(self, request):
+        """Create a collection (staff/admin only).
+
+        Body: title (required), parent slug, description, is_published.
+        """
+        title = (request.data.get('title') or '').strip()
+        if not title:
+            return Response({'error': 'Title is required.'},
+                            status=status.HTTP_400_BAD_REQUEST)
+
+        slug = slugify(title)
+        if not slug:
+            return Response({'error': 'Title must contain letters or digits.'},
+                            status=status.HTTP_400_BAD_REQUEST)
+        if Category.objects.filter(slug=slug).exists():
+            return Response(
+                {'error': f'A collection with slug "{slug}" already exists.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        parent = None
+        parent_slug = request.data.get('parent')
+        if parent_slug:
+            try:
+                parent = Category.objects.get(slug=parent_slug)
+            except Category.DoesNotExist:
+                return Response({'error': 'Parent collection not found.'},
+                                status=status.HTTP_400_BAD_REQUEST)
+            if not parent.can_view(request.user):
+                raise Http404()
+
+        category = Category.objects.create(
+            title=title,
+            slug=slug,
+            description=(request.data.get('description') or '').strip(),
+            parent=parent,
+            owner=request.user,
+            team=get_active_team(request.user),
+            is_published=bool(request.data.get('is_published', True)),
+        )
+        serializer = CategoryTreeSerializer(category,
+                                            context={'request': request})
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+    def destroy(self, request, slug=None):
+        """Remove a collection and its contents (staff/admin only).
+
+        Cascades to subcollections and files, matching the model FKs.
+        """
+        category = self.get_object()  # ACL-checked, 404 if not visible
+        category.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
     @action(detail=True, methods=['get'], url_path='files')
     def files(self, request, slug=None):
         """Files directly in this category (ACL-filtered)."""
@@ -115,6 +194,17 @@ class StoredFileViewSet(viewsets.ReadOnlyModelViewSet):
     permission_classes = [
         permissions.IsAuthenticated, PasswordChangeRequired,
     ]
+
+    WRITE_ACTIONS = ('upload', 'replace', 'destroy')
+
+    def get_permissions(self):
+        """Reads: any authenticated user. Upload/replace/remove: admin or staff."""
+        if getattr(self, 'action', None) in self.WRITE_ACTIONS:
+            return [
+                permissions.IsAuthenticated(), CanManageContent(),
+                PasswordChangeRequired(),
+            ]
+        return super().get_permissions()
 
     def get_queryset(self):
         """Return all files — ACL filtering happens in get_object / list."""
@@ -142,6 +232,16 @@ class StoredFileViewSet(viewsets.ReadOnlyModelViewSet):
         if not obj.can_view(self.request.user):
             raise Http404()
         return obj
+
+    # ─── Remove (admin & staff) ──────────────────────────────
+
+    def destroy(self, request, pk=None):
+        """Delete a file, its media payload and cascading logs."""
+        file_obj = self.get_object()  # ACL-checked, 404 if not visible
+        if file_obj.local_file:
+            file_obj.local_file.delete(save=False)
+        file_obj.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
     @action(detail=True, methods=['get'], url_path='download')
     def download(self, request, pk=None):
@@ -231,8 +331,7 @@ class StoredFileViewSet(viewsets.ReadOnlyModelViewSet):
         'mp3', 'wav', 'ogg', 'mp4', 'webm',
     }
 
-    @action(detail=False, methods=['post'], url_path='upload',
-            permission_classes=[permissions.IsAdminUser])
+    @action(detail=False, methods=['post'], url_path='upload')
     def upload(self, request):
         """Upload a new file into a category (admin only).
 
@@ -245,8 +344,7 @@ class StoredFileViewSet(viewsets.ReadOnlyModelViewSet):
         """
         return self._do_upload(request)
 
-    @action(detail=True, methods=['post'], url_path='replace',
-            permission_classes=[permissions.IsAdminUser])
+    @action(detail=True, methods=['post'], url_path='replace')
     def replace(self, request, pk=None):
         """Replace an existing file's payload (admin only).
 
@@ -305,16 +403,25 @@ class StoredFileViewSet(viewsets.ReadOnlyModelViewSet):
             return Response({'errors': errors},
                             status=status.HTTP_400_BAD_REQUEST)
 
+        # SlugField caps at 50 chars — SQLite ignored it, Postgres enforces it.
+        slug = request.data.get('slug') or slugify(
+            file_obj.name.rsplit('.', 1)[0],
+        )
+        slug = slug[:StoredFile._meta.get_field('slug').max_length]
+        if not slug:
+            errors.append('File name must contain letters or digits for a slug.')
+            return Response({'errors': errors},
+                            status=status.HTTP_400_BAD_REQUEST)
+
         meta = self._mime_and_size(file_obj)
         obj = StoredFile.objects.create(
             category=category,
-            title=request.data.get('title', file_obj.name),
-            slug=request.data.get('slug') or file_obj.name.rsplit('.', 1)[0]
-                .replace(' ', '-').lower(),
+            title=(request.data.get('title') or file_obj.name)[:255],
+            slug=slug,
             description=request.data.get('description', ''),
             storage=StoredFile.StorageKind.LOCAL,
             local_file=file_obj,
-            mime_type=meta['mime_type'],
+            mime_type=meta['mime_type'][:100],
             filesize=meta['filesize'],
             team=get_active_team(request.user),
             owner=request.user,

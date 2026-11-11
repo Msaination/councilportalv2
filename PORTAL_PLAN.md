@@ -441,7 +441,136 @@ The project uses **two repositories**:
 
 ---
 
-## 6. Immediate Next Steps
+## 6. External Integration — Municipality Complaint Management System
+
+**Requirement (from project owner):** ward councillors log into the Council
+Portal and see the complaints/statuses that belong to them, pulled from the
+municipality's existing Complaint Management System (CMS).
+
+- CMS location: `http://172.20.17.16:3000/dashboard` (LAN only)
+- Verified: the CMS is a **Next.js** app (Turbopack build) — same family as
+  the portal frontend, reachable server-to-server on the municipal LAN.
+- Councillors currently have **separate logins** for each system today.
+
+### 6.1 Integration options
+
+| Option | How it works | When to use |
+|---|---|---|
+| **A. Server-to-server gateway (recommended)** | Portal user logs in once (portal JWT). Django calls the CMS API/database with a **service account**, filters by the councillor's identity, returns data to the portal. | Fastest path; CMS login untouched; all authorization decided in our trusted backend. |
+| **B. True SSO (OIDC/OAuth)** — **DECIDED** | Shared IdP — **Authentik** (see §6.6). Both apps accept one credential issued by Authentik. | Chosen by the project owner for Phase 3. Still requires CMS to support OIDC login — see the §6.3 discovery gate. |
+| **C. Shared user table / direct DB read** | Django reads the CMS database directly (ideally a read-only view). | Stopgap only — couples the systems at schema level; CMS updates can break us silently. |
+
+**Avoid:** browser-side calls from the portal frontend straight to the CMS API
+(needs CORS, duplicate token handling, and client-trustable filtering =
+insecure).
+
+### 6.2 Authentication workflow (Option A)
+
+```
+Councillor ──logs in once──▶ Portal (Next.js) ──JWT──▶ Django
+                                                          │
+                                        maps employee no. ─┤
+                                        → CMS identity    │
+                                                          ▼
+                                              CMS API / DB (service
+                                              account, LAN, server-to-server)
+```
+
+- Councillors keep **one credential** — the portal login. They never see CMS
+  credentials; the browser never touches the CMS.
+- Django ↔ CMS trust is a **service account / internal API key**, not user
+  credentials.
+- Identity mapping: portal **employee numbers** (unique `S`-prefixed, already
+  in `UserProfile`) ↔ CMS user ID — a small mapping table in our Postgres.
+
+### 6.3 Phased workflow
+
+1. **Discovery (no code)**
+   - Does the CMS expose a REST/GraphQL API, or only a UI? (Probe `/api/*`.)
+   - **SSO gate (hard requirement):** does the CMS support OIDC login? If
+     not, SSO becomes a feature request to the CMS developers and Phase 2
+     (service-account gateway) remains the only path for Phase 3's goal.
+   - How does it authenticate (own login, JWT, session cookie)?
+   - How are complaints keyed to a councillor — ward number, user ID, name?
+   - Data needed: list, status, dates, ward. **Read-only first** — no write-back.
+2. **Phase 2 — read-only dashboard (quick win)**
+   - Mirror/cache table in our Postgres (or live fetch, depending on volume).
+   - Django endpoint `GET /api/complaints/` — resolves logged-in councillor →
+     CMS identity → returns their complaints.
+   - Portal page "My Complaints" (status badges: open / in progress /
+     resolved) + dashboard widgets ("open complaints", "resolved this month").
+3. **Phase 3 — SSO with Authentik** (decided, see §6.6): deploy Authentik as
+   the shared IdP on the municipal LAN; both the portal and the CMS
+   authenticate against it. The §6.2 gateway is retained for complaint data.
+4. **Phase 4 — write-back** (e.g. "escalate" from the portal): only after
+   Phase 2 is stable. Start read-only; it halves the risk.
+
+### 6.4 Caveats
+
+- If the CMS has **no API**, fall back to (in order of preference): a small
+  API added to the CMS → a read-only DB view → a scheduled sync (e.g. every
+  15 min). A scheduled sync is usually the pragmatic middle ground.
+- Both systems are on the `172.20.x.x` LAN — server-to-server calls are
+  trivial and already isolated from the internet.
+- Decide **freshness**: real-time vs. cached (15 min). For council dashboards
+  caching is almost always fine and kinder to the CMS.
+- Filtering by councillor must happen **server-side** (our backend), never in
+  the browser.
+
+### 6.5 Identity decision record (auth, user creation, data flow)
+
+**Decision: the Council Portal is the system of record for councillor
+identities. The CMS is a downstream consumer.**
+
+| Question | Decision |
+|---|---|
+| Self-registration for councillors? | **No.** Admin creates the account (keeps employee numbers verified, no unknown accounts in a system holding council documents). Open registration would need an approval queue anyway = admin creation with extra steps. |
+| Default access level | Existing model: authenticated access gated by capabilities/ACLs — viewing "my complaints" is ordinary member access, no special capability needed. |
+| First-login password change | **Keep the current portal flow**: admin creates → forced password change on first login → councillor active. |
+| Which system registers first? | **Council Portal.** It already owns the profile model (employee number, cell, email, avatar) and the creation workflow. The CMS is a point solution; point solutions don't own org-wide identities. |
+| How does the CMS get councillor data (name, email, cell, employee no.)? | Provisioned **from** the portal — never manually re-entered in the CMS. Mechanism, per CMS capability: **(1)** push provisioning (Django → CMS API via service account), **(2)** pull sync (CMS/scheduled job fetches the roster from a portal admin endpoint), or **(3)** SSO claims from a shared IdP (Phase 3). |
+| Who owns profile edits? | **Portal only.** CMS mirrors; changes propagate portal → CMS, never the reverse. |
+| Passwords | The portal password never flows to the CMS. Under Option A the CMS account exists only so complaint records have an owner (councillors may never log in there directly); under SSO the CMS has no password of its own. |
+
+**Rule of thumb:** register and edit in the Council Portal; every other
+system subscribes.
+
+### 6.6 SSO decision — Authentik as the Identity Provider
+
+**Decision (2026-11-10): the project will use Authentik as the dedicated IdP
+for Phase 3 SSO.**
+
+```mermaid
+flowchart TD
+    C[Councillor / Staff] -->|one login| A[Authentik IdP :9443]
+    A -->|OIDC token| P[Council Portal<br/>Next.js + Django]
+    A -->|OIDC token| X[Complaint System :3000]
+    P -->|service account| X
+```
+
+- **Flow:** portal (or CMS) redirects to Authentik → user logs in once →
+  Authentik issues an OIDC token with claims (name, email, employee number,
+  roles) → each app validates the token server-side. No password ever
+  reaches the applications; the browser only ferries redirects.
+- **Profile data** arrives in the token claims at each login — no identity
+  sync jobs needed; profile edits in the portal are reflected on next login.
+- **Why Authentik:** Docker-native (fits the existing compose stack), user
+  federation back to Django (portal stays the creation point per §6.5), MFA /
+  password policy / lockout in one place, fully self-hosted on the municipal
+  LAN (no data leaves the network).
+- **Roles are unchanged:** Authentik is the *login broker*, not the source of
+  truth. Accounts are still created in the Council Portal (§6.5) and
+  federated to Authentik; the §6.1 Option A gateway still carries complaint
+  *data* — SSO answers "who is this?", the gateway answers "which data may
+  they see?".
+- **Sequencing:** portal integration with Authentik first; CMS integration
+  only after the §6.3 discovery gate confirms the CMS supports OIDC.
+- **Phase 2 is still required** regardless — the gateway is needed for
+  complaint data either way.
+
+---
+
+## 7. Immediate Next Steps
 
 1. **Production Docker** — fix the frontend image build (pnpm build-script approval) and run `docker compose up -d --build`.
 2. **CI/CD** — GitHub Actions running `python manage.py test` and the Next.js build.

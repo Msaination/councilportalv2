@@ -1,0 +1,66 @@
+# Authentik SSO — Identity Provider for Council Portal + Complaint System
+# Plan: PORTAL_PLAN.md §6.6. Standalone stack: docker compose up -d
+# Setup wizard: http://localhost:9080/if/admin/
+
+name: authentik
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U authentik -d authentik"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    environment:
+      POSTGRES_DB: authentik
+      POSTGRES_USER: authentik
+      POSTGRES_PASSWORD: ak-postgres-change-me
+    volumes:
+      - ak-pgdata:/var/lib/postgresql/data
+
+  redis:
+    image: redis:8-alpine
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - ak-redis:/data
+
+  server:
+    image: ghcr.io/goauthentik/server:${AUTHENTIK_VERSION}
+    restart: unless-stopped
+    command: server
+    env_file: .env
+    ports:
+      - "9080:9000"   # http  → setup wizard / logins (default listen.http = [::]:9000)
+      - "9443:9443"   # https
+    volumes:
+      - ak-media:/media
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker:
+    image: ghcr.io/goauthentik/server:${AUTHENTIK_VERSION}
+    restart: unless-stopped
+    command: worker
+    env_file: .env
+    volumes:
+      - ak-media:/media
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+volumes:
+  ak-pgdata:
+  ak-redis:
+  ak-media:
