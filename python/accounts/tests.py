@@ -3,7 +3,9 @@
 import io
 import shutil
 import tempfile
+from unittest import mock
 
+import requests as requests_lib
 from django.contrib.auth.models import Permission, User
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import override_settings
@@ -12,15 +14,31 @@ from rest_framework.test import APITestCase
 
 from documents.models import Category, StoredFile
 
+from .authentik import provision_user
 from .models import Membership, Team, UserProfile, get_active_team
+from .oidc import CouncilPortalOIDCBackend
 
 TEST_MEDIA_ROOT = tempfile.mkdtemp()
 
 
+def onboard(user):
+    """Clear the first-login password flag on both the DB row and the user's
+    cached profile instance. The creation signal caches the profile on the
+    user, so a queryset.update() would leave the in-memory object stale and
+    PasswordChangeRequired would keep rejecting API calls."""
+    profile = user.profile
+    profile.must_change_password = False
+    profile.save(update_fields=['must_change_password'])
+    return user
+
+
 def make_user(username, **kwargs):
-    return User.objects.create_user(
+    """Create a user as if they had already onboarded (no forced password
+    change) — tests exercise team/ACL logic, not the first-login flow."""
+    user = User.objects.create_user(
         username=username, password='pass12345', **kwargs,
     )
+    return onboard(user)
 
 
 def results(response):
@@ -32,7 +50,9 @@ def grant(user, codename):
     user.user_permissions.add(Permission.objects.get(codename=codename))
 
 
-@override_settings(MEDIA_ROOT=TEST_MEDIA_ROOT)
+# AUTHENTIK_API_URL='' disables provisioning in tests — they must never make
+# real HTTP calls to the identity provider (the token comes from authentik/.env).
+@override_settings(MEDIA_ROOT=TEST_MEDIA_ROOT, AUTHENTIK_API_URL='')
 class TeamApiTestCase(APITestCase):
     @classmethod
     def tearDownClass(cls):
@@ -44,9 +64,9 @@ class TeamApiTestCase(APITestCase):
         self.member = make_user('member')
         self.outsider = make_user('outsider')
         self.unprivileged = make_user('unprivileged')
-        self.admin = User.objects.create_superuser(
+        self.admin = onboard(User.objects.create_superuser(
             'root', 'root@example.com', 'pass12345',
-        )
+        ))
         for user in (self.owner, self.member, self.outsider, self.admin):
             grant(user, 'view_teams')
 
@@ -210,6 +230,14 @@ class EmployeeNumberTests(TeamApiTestCase):
 
 
 class ForcedPasswordChangeTests(TeamApiTestCase):
+    def test_any_new_user_is_forced_to_change_password(self):
+        """Created through any path (Django admin, shell, signal) — not just
+        the portal API — the first login must force a password change."""
+        user = User.objects.create_user('freshguy', 'fresh@example.com',
+                                        'Whatever1!')
+        profile = UserProfile.objects.get(user=user)
+        self.assertTrue(profile.must_change_password)
+
     def test_create_user_gets_default_password_and_forced_change(self):
         self.client.force_authenticate(self.admin)
         response = self.client.post('/api/access/users/', {
@@ -238,6 +266,49 @@ class ForcedPasswordChangeTests(TeamApiTestCase):
         self.client.force_authenticate(fresh)
         self.assertEqual(self.client.get('/api/files/').status_code, 200)
 
+
+class OidcUserMappingTests(APITestCase):
+    def setUp(self):
+        self.owner = make_user('owner')
+        grant(self.owner, 'edit_employee_numbers')
+
+    def test_backend_maps_authentik_claims_to_local_user(self):
+        backend = CouncilPortalOIDCBackend()
+        user = backend.create_user({
+            'email': 'alice@example.com',
+            'preferred_username': 'alice',
+            'given_name': 'Alice',
+            'family_name': 'Jones',
+            'employee_number': 'S000111',
+        })
+
+        self.assertEqual(user.username, 'alice')
+        self.assertEqual(user.email, 'alice@example.com')
+        self.assertEqual(user.first_name, 'Alice')
+        self.assertEqual(user.last_name, 'Jones')
+        self.assertEqual(user.profile.employee_number, 'S000111')
+
+    def test_backend_reuses_existing_user_by_email(self):
+        existing = make_user('alice@example.com', email='alice@example.com')
+        backend = CouncilPortalOIDCBackend()
+        match = backend.filter_users_by_claims({
+            'email': 'alice@example.com',
+            'preferred_username': 'alice',
+        })
+
+        self.assertEqual(list(match), [existing])
+
+    def test_jit_user_creation_is_disabled(self):
+        """§6.5: Authentik must never mint portal accounts (provisioning is
+        portal → Authentik only), so an unknown claim must not match."""
+        from django.test import override_settings
+        with override_settings(OIDC_CREATE_USER=False):
+            backend = CouncilPortalOIDCBackend()
+            self.assertEqual(
+                list(backend.filter_users_by_claims({'email': 'ghost@x.io'})),
+                [],
+            )
+
     def test_assigned_editor_cannot_create_users(self):
         grant(self.owner, 'edit_employee_numbers')
         self.client.force_authenticate(self.owner)
@@ -247,6 +318,144 @@ class ForcedPasswordChangeTests(TeamApiTestCase):
             'employee_number': 'S000998',
         }, format='json')
         self.assertEqual(response.status_code, 403)
+
+
+@override_settings(
+    AUTHENTIK_API_URL='http://authentik.test',
+    AUTHENTIK_ADMIN_TOKEN='test-token',
+)
+class AuthentikProvisioningTests(APITestCase):
+    def setUp(self):
+        # Fixture creation must not attempt HTTP against the fake broker URL.
+        with mock.patch('accounts.signals.provision_user'):
+            self.admin = onboard(User.objects.create_superuser(
+                'root', 'root@example.com', 'pass12345',
+            ))
+
+    @staticmethod
+    def _reset_signal_noise(*mocked):
+        """make_user() fires the post_save mirror — ignore its HTTP calls so
+        each test only counts the explicit provision_user() under test."""
+        for m in mocked:
+            m.reset_mock()
+
+    def _response(self, payload, status=200):
+        response = mock.Mock(spec=requests_lib.Response)
+        response.status_code = status
+        response.raise_for_status.return_value = None
+        response.json.return_value = payload
+        return response
+
+    @mock.patch('accounts.authentik.requests.get')
+    @mock.patch('accounts.authentik.requests.post')
+    @mock.patch('accounts.authentik.requests.patch')
+    def test_new_user_is_created_with_password(self, patch, post, get):
+        user = make_user('carol', email='carol@example.com')
+        get.return_value = self._response({'results': []})
+        post.return_value = self._response({'pk': 42})
+        self._reset_signal_noise(get, post, patch)
+
+        pk = provision_user(user, temp_password='Temp#Pass123')
+
+        self.assertEqual(pk, 42)
+        self.assertEqual(len(post.call_args_list), 2)
+        create_call, password_call = post.call_args_list
+        payload = create_call.kwargs['json']
+        self.assertEqual(payload['username'], 'carol')
+        self.assertEqual(payload['email'], 'carol@example.com')
+        self.assertIn('/set_password/', password_call.args[0])
+        self.assertEqual(password_call.kwargs['json']['password'],
+                         'Temp#Pass123')
+
+    @mock.patch('accounts.authentik.requests.get')
+    @mock.patch('accounts.authentik.requests.post')
+    @mock.patch('accounts.authentik.requests.patch')
+    def test_existing_user_is_patched_without_password(
+            self, patch, post, get):
+        user = make_user('carol', email='carol@example.com')
+        get.return_value = self._response({'results': [{'pk': 7}]})
+        patch.return_value = self._response({'pk': 7})
+        self._reset_signal_noise(get, post, patch)
+
+        pk = provision_user(user)
+
+        self.assertEqual(pk, 7)
+        patch.assert_called_once()
+        post.assert_not_called()
+
+    @mock.patch('accounts.authentik.requests.get')
+    def test_broker_failure_never_raises(self, get):
+        get.side_effect = requests_lib.ConnectionError('broker down')
+        user = make_user('dave')  # signal's attempt fails harmlessly too
+
+        self.assertIsNone(provision_user(user))
+
+    @override_settings(AUTHENTIK_API_URL='', AUTHENTIK_ADMIN_TOKEN='')
+    def test_unconfigured_broker_skips_without_error(self):
+        self.assertIsNone(provision_user(make_user('erin')))
+
+    @mock.patch('accounts.authentik.requests.get')
+    @mock.patch('accounts.authentik.requests.post')
+    @mock.patch('accounts.authentik.requests.patch')
+    def test_password_hash_is_mirrored_via_set_password_hash(
+            self, patch, post, get):
+        """An admin-set (or portal-changed) password must also work for SSO:
+        the Django hash is copied verbatim to Authentik."""
+        user = make_user('frank')
+        get.return_value = self._response({'results': [{'pk': 9}]})
+        post.return_value = self._response({}, status=204)
+        self._reset_signal_noise(get, post, patch)
+
+        pk = provision_user(user, password_hash=user.password)
+
+        self.assertEqual(pk, 9)
+        # Identity still mirrors (PATCH), and the hash rides along after it.
+        patch.assert_called_once()
+        self.assertEqual(patch.call_args.kwargs['json']['username'], 'frank')
+        call = post.call_args
+        self.assertIn('/set_password_hash/', call.args[0])
+        self.assertEqual(call.kwargs['json']['password'], user.password)
+
+    @mock.patch('accounts.signals.provision_user')
+    def test_superadmin_user_creation_provisions(self, provision):
+        from .views import DEFAULT_NEW_USER_PASSWORD
+        provision.return_value = 1
+        self.client.force_authenticate(self.admin)
+        response = self.client.post('/api/access/users/', {
+            'username': 'provisioned',
+            'email': 'prov@example.com',
+            'employee_number': 'S000777',
+        }, format='json')
+
+        self.assertEqual(response.status_code, 201)
+        provision.assert_called_once()
+        _, kwargs = provision.call_args
+        created = User.objects.get(username='provisioned')
+        # The default password's hash is what gets mirrored to Authentik,
+        # so Council SSO accepts it too.
+        self.assertEqual(kwargs['password_hash'], created.password)
+        self.assertTrue(created.check_password(DEFAULT_NEW_USER_PASSWORD))
+
+    @mock.patch('accounts.signals.provision_user')
+    def test_password_change_mirrors_via_signal(self, provision):
+        """The portal change-password endpoint must reach Authentik without
+        an explicit call — the post_save signal owns all credential paths."""
+        provision.return_value = 1
+        user = make_user('gina', email='gina@example.com')
+        provision.reset_mock()
+
+        self.client.force_authenticate(user)
+        response = self.client.post('/api/profile/password/', {
+            'current_password': 'pass12345',
+            'new_password': 'Zebra#Cloud91',
+        }, format='json')
+
+        self.assertEqual(response.status_code, 200)
+        user.refresh_from_db()
+        self.assertTrue(user.check_password('Zebra#Cloud91'))
+        provision.assert_called_once()
+        self.assertEqual(provision.call_args.kwargs['password_hash'],
+                         user.password)
 
 
 class TeamMemberTests(TeamApiTestCase):
@@ -367,7 +576,7 @@ class TeamIsolationTests(TeamApiTestCase):
         self.assertEqual(uploaded.team, self.team_a)
 
 
-@override_settings(MEDIA_ROOT=TEST_MEDIA_ROOT)
+@override_settings(MEDIA_ROOT=TEST_MEDIA_ROOT, AUTHENTIK_API_URL='')
 class ProfileApiTests(APITestCase):
     @classmethod
     def tearDownClass(cls):

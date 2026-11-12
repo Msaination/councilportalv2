@@ -11,6 +11,7 @@ https://docs.djangoproject.com/en/6.1/ref/settings/
 """
 
 import os
+import sys
 from pathlib import Path
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -46,10 +47,16 @@ INSTALLED_APPS = [
     'rest_framework.authtoken',
     'django_filters',
     'corsheaders',
+    'mozilla_django_oidc',
     # --- Portal apps ---
     'accounts',
     'documents',
     'calendar_app',
+]
+
+AUTHENTICATION_BACKENDS = [
+    'django.contrib.auth.backends.ModelBackend',
+    'accounts.oidc.CouncilPortalOIDCBackend',
 ]
 
 MIDDLEWARE = [
@@ -141,6 +148,74 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/6.1/howto/static-files/
 
 STATIC_URL = 'static/'
+
+# Authentik / OpenID Connect (single sign-on broker)
+
+# Local dev: pick up OIDC_* credentials (+ the provisioning token) from the
+# Authentik stack's .env so the portal doesn't duplicate secrets. Existing
+# env vars always win.
+_authentik_env = BASE_DIR.parent / 'authentik' / '.env'
+if _authentik_env.is_file():
+    for _line in _authentik_env.read_text().splitlines():
+        _line = _line.strip()
+        if _line and not _line.startswith('#') and '=' in _line:
+            _key, _, _value = _line.partition('=')
+            _key = _key.strip()
+            if ((_key.startswith('OIDC_') or
+                 _key == 'AUTHENTIK_ADMIN_TOKEN') and _key not in os.environ):
+                os.environ[_key] = _value.strip()
+
+OIDC_ISSUER = os.environ.get('OIDC_ISSUER', '').rstrip('/')
+OIDC_CLIENT_ID = os.environ.get('OIDC_CLIENT_ID', '')
+OIDC_CLIENT_SECRET = os.environ.get('OIDC_CLIENT_SECRET', '')
+OIDC_REDIRECT_URI = os.environ.get(
+    'OIDC_REDIRECT_URI',
+    'http://localhost:8000/api/auth/oidc/callback/',
+)
+OIDC_RP_CLIENT_ID = OIDC_CLIENT_ID
+OIDC_RP_CLIENT_SECRET = OIDC_CLIENT_SECRET
+OIDC_RP_SIGN_ALGO = 'RS256'
+OIDC_RP_SCOPES = 'openid email profile'
+# §6.5: the portal is the ONLY place users are registered. Authentik must
+# never auto-create portal accounts from OIDC claims — users are pushed into
+# Authentik instead (accounts.authentik.provision_user).
+OIDC_CREATE_USER = False
+
+# Provisioning: portal → Authentik user mirror (best-effort push).
+# Tests must NEVER call the real broker — it holds production identities.
+AUTHENTIK_API_URL = os.environ.get('AUTHENTIK_API_URL', 'http://localhost:9080')
+AUTHENTIK_ADMIN_TOKEN = os.environ.get('AUTHENTIK_ADMIN_TOKEN', '')
+if 'test' in sys.argv:
+    AUTHENTIK_API_URL = ''
+
+# NOTE: Authentik puts authorize/token/userinfo at /application/o/<action>/
+# (no app slug), while issuer-scoped endpoints (jwks, end-session) include it.
+# See the discovery document for the authoritative URLs.
+# issuer = .../application/o/council-portal/ → base = .../application/o
+_oidc_base = OIDC_ISSUER.rstrip('/').rsplit('/', 1)[0] if OIDC_ISSUER else ''
+OIDC_OP_AUTHORIZATION_ENDPOINT = f'{_oidc_base}/authorize/' if _oidc_base else ''
+OIDC_OP_TOKEN_ENDPOINT = f'{_oidc_base}/token/' if _oidc_base else ''
+OIDC_OP_USER_ENDPOINT = f'{_oidc_base}/userinfo/' if _oidc_base else ''
+OIDC_OP_JWKS_ENDPOINT = f'{OIDC_ISSUER}/jwks/' if OIDC_ISSUER else ''
+OIDC_OP_LOGOUT_ENDPOINT = (
+    f'{OIDC_ISSUER}/end-session/' if OIDC_ISSUER else ''
+)
+OIDC_OP_DISCOVERY_DOCUMENT_URL = (
+    f'{OIDC_ISSUER}/.well-known/openid-configuration'
+    if OIDC_ISSUER else ''
+)
+# After Authentik authenticates, hand JWTs to the Next.js SPA (see
+# accounts.oidc_views) instead of redirecting into Django's own templates.
+OIDC_CALLBACK_CLASS = 'accounts.oidc_views.JwtOIDCCallbackView'
+OIDC_FRONTEND_REDIRECT = os.environ.get(
+    'OIDC_FRONTEND_REDIRECT', 'http://localhost:3000/login/oidc/',
+)
+LOGIN_URL = '/api/auth/oidc/authenticate/'
+LOGIN_REDIRECT_URL = OIDC_FRONTEND_REDIRECT
+LOGIN_REDIRECT_URL_FAILURE = os.environ.get(
+    'OIDC_FRONTEND_REDIRECT_FAILURE', 'http://localhost:3000/login?oidc=error',
+)
+LOGOUT_REDIRECT_URL = '/login'
 
 # Media files (file uploads)
 MEDIA_URL = '/media/'

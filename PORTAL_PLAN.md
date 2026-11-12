@@ -530,10 +530,24 @@ identities. The CMS is a downstream consumer.**
 | Which system registers first? | **Council Portal.** It already owns the profile model (employee number, cell, email, avatar) and the creation workflow. The CMS is a point solution; point solutions don't own org-wide identities. |
 | How does the CMS get councillor data (name, email, cell, employee no.)? | Provisioned **from** the portal — never manually re-entered in the CMS. Mechanism, per CMS capability: **(1)** push provisioning (Django → CMS API via service account), **(2)** pull sync (CMS/scheduled job fetches the roster from a portal admin endpoint), or **(3)** SSO claims from a shared IdP (Phase 3). |
 | Who owns profile edits? | **Portal only.** CMS mirrors; changes propagate portal → CMS, never the reverse. |
-| Passwords | The portal password never flows to the CMS. Under Option A the CMS account exists only so complaint records have an owner (councillors may never log in there directly); under SSO the CMS has no password of its own. |
+| Passwords | **DECIDED (2026-11-11): Option A — the IdP owns credentials.** Authentik holds the real councillor password (MFA, lockout, policy live there); the portal's local password is a **break-glass** credential for superusers/emergency only, and is never pushed anywhere. Under Option A the CMS account exists only so complaint records have an owner; under SSO the CMS has no password of its own. |
 
 **Rule of thumb:** register and edit in the Council Portal; every other
 system subscribes.
+
+**Implementation (2026-11-11):** push provisioning is live —
+
+- `accounts/authentik.py::provision_user()` mirrors portal users into
+  Authentik (find-by-username → PATCH/POST, idempotent, best-effort: a down
+  broker never blocks portal operations).
+- Hooks: superadmin user creation (sends the temp password, which the
+  councillor replaces **in Authentik** on first SSO login) and profile
+  identity edits (username/email).
+- `manage.py provision_authentik_users [usernames...]` backfills everyone.
+- JIT auto-create is **off** (`OIDC_CREATE_USER = False`): an Authentik-only
+  account can never mint a portal account — provisioning only flows
+  portal → Authentik, one direction.
+- Service token: `AUTHENTIK_ADMIN_TOKEN` in the gitignored `authentik/.env`.
 
 ### 6.6 SSO decision — Authentik as the Identity Provider
 

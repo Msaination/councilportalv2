@@ -30,6 +30,8 @@ router.register(r'admin/stats', AdminStatsViewSet, basename='admin-stats')
 
 urlpatterns = [
     path('', include(router.urls)),
+    # OIDC / Authentik single sign-on
+    path('auth/oidc/', include('mozilla_django_oidc.urls')),
     # JWT auth endpoints (for API-first clients / mobile / SaaS)
     path('auth/token/', TokenObtainPairView.as_view(), name='token_obtain_pair'),
     path('auth/token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),

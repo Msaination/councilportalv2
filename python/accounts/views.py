@@ -159,6 +159,8 @@ class UserAccessViewSet(mixins.ListModelMixin,
         profile.must_change_password = True
         profile.save(update_fields=['employee_number', 'must_change_password'])
         user.refresh_from_db()
+        # The post_save signal already mirrored this user (with the default
+        # password's hash) to Authentik, so Council SSO works immediately.
 
         return Response(
             UserAccessSerializer(
@@ -196,7 +198,7 @@ def my_profile(request):
         context={'request': request},
     )
     serializer.is_valid(raise_exception=True)
-    serializer.save()
+    serializer.save()  # accounts.signals mirrors identity to Authentik
     return Response(serializer.data)
 
 
@@ -210,6 +212,7 @@ def change_password(request):
     serializer.is_valid(raise_exception=True)
     request.user.set_password(serializer.validated_data['new_password'])
     request.user.save(update_fields=['password'])
+    # accounts.signals mirrors the new hash to Authentik automatically.
 
     profile, _ = UserProfile.objects.get_or_create(user=request.user)
     if profile.must_change_password:

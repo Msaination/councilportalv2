@@ -2,6 +2,9 @@ from django.contrib import admin
 
 from .models import Membership, Team, UserProfile
 
+# User admin stays stock: the post_save signal in accounts.signals mirrors
+# every user save (including the admin's "set password" view) to Authentik.
+
 
 @admin.register(Team)
 class TeamAdmin(admin.ModelAdmin):
