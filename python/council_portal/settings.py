@@ -18,6 +18,39 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 
+def _load_env_file(path, accept=None):
+    """Copy KEY=VALUE pairs from *path* into os.environ.
+
+    Real environment variables always win, so Docker, systemd or Windows
+    ``setx`` values override anything in a file. *accept*, when given, limits
+    which keys are copied — used for files owned by another app.
+
+    Returns the keys this call actually populated, so callers can tell whether
+    the file provided a value or the environment already had one.
+    """
+    loaded = set()
+    if not path.is_file():
+        return loaded
+    for raw_line in path.read_text().splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith('#') or '=' not in line:
+            continue
+        key, _, value = line.partition('=')
+        key = key.strip()
+        if accept is not None and not accept(key):
+            continue
+        if key not in os.environ:
+            os.environ[key] = value.strip()
+            loaded.add(key)
+    return loaded
+
+
+# App configuration: python/.env (git-ignored; see .env.example). Loaded
+# before any setting reads os.environ, so it covers Django, database, CORS and
+# third-party credentials alike.
+_APP_ENV_KEYS = _load_env_file(BASE_DIR / '.env')
+
+
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/6.1/howto/deployment/checklist/
 
@@ -152,19 +185,12 @@ STATIC_URL = 'static/'
 
 # Authentik / OpenID Connect (single sign-on broker)
 
-# Local dev: pick up OIDC_* credentials (+ the provisioning token) from the
-# Authentik stack's .env so the portal doesn't duplicate secrets. Existing
-# env vars always win.
-_authentik_env = BASE_DIR.parent / 'authentik' / '.env'
-if _authentik_env.is_file():
-    for _line in _authentik_env.read_text().splitlines():
-        _line = _line.strip()
-        if _line and not _line.startswith('#') and '=' in _line:
-            _key, _, _value = _line.partition('=')
-            _key = _key.strip()
-            if ((_key.startswith('OIDC_') or
-                 _key == 'AUTHENTIK_ADMIN_TOKEN') and _key not in os.environ):
-                os.environ[_key] = _value.strip()
+# Local dev: additionally pick up OIDC_* credentials (+ the provisioning token)
+# from the Authentik stack's .env so the portal doesn't duplicate secrets.
+_load_env_file(
+    BASE_DIR.parent / 'authentik' / '.env',
+    accept=lambda key: key.startswith('OIDC_') or key == 'AUTHENTIK_ADMIN_TOKEN',
+)
 
 OIDC_ISSUER = os.environ.get('OIDC_ISSUER', '').rstrip('/')
 OIDC_CLIENT_ID = os.environ.get('OIDC_CLIENT_ID', '')
@@ -190,20 +216,20 @@ if 'test' in sys.argv:
     AUTHENTIK_API_URL = ''
 
 # ─── Complaints gateway → Supabase (CMS data backend, §6.7) ─
-# Pick up the CMS repo's .env.local so credentials are never duplicated into
-# this repo. Existing env vars always win. Tests never call the real DB.
-_cms_env = BASE_DIR.parent / 'CMS' / '.env.local'
-if _cms_env.is_file():
-    for _line in _cms_env.read_text().splitlines():
-        _line = _line.strip()
-        if _line and not _line.startswith('#') and '=' in _line:
-            _key, _, _value = _line.partition('=')
-            _key = _key.strip()
-            if _key in ('NEXT_PUBLIC_SUPABASE_URL',
-                        'NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY',
-                        'SUPABASE_SERVICE_ROLE_KEY',
-                        'SUPABASE_SECRET_KEY') and _key not in os.environ:
-                os.environ[_key] = _value.strip()
+# python/.env is the primary source. Only fall back to a sibling CMS clone
+# when the app env file supplied no Supabase settings at all. Tests never
+# call the real DB.
+_CMS_ENV_KEYS = frozenset({
+    'NEXT_PUBLIC_SUPABASE_URL',
+    'NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY',
+    'SUPABASE_SERVICE_ROLE_KEY',
+    'SUPABASE_SECRET_KEY',
+})
+if not _APP_ENV_KEYS & _CMS_ENV_KEYS:
+    _load_env_file(
+        BASE_DIR.parent / 'CMS' / '.env.local',
+        accept=_CMS_ENV_KEYS.__contains__,
+    )
 
 SUPABASE_URL = os.environ.get('NEXT_PUBLIC_SUPABASE_URL', '')
 # Supabase renamed the server-only key: accept both variable names.

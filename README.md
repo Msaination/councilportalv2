@@ -241,26 +241,31 @@ councilportalv2/
 
 ### Backend (`python/.env`)
 
+Copy `python/.env.example` to `python/.env`; Django loads it automatically.
+**Real environment variables always win**, so on a server prefer Docker Compose
+`env_file`, systemd `EnvironmentFile`, or Windows `setx`.
+
 ```bash
 # Django
-DEBUG=True
-SECRET_KEY=change-this-in-production
-ALLOWED_HOSTS=localhost,127.0.0.1
+DJANGO_DEBUG=1
+DJANGO_SECRET_KEY=change-this-in-production
+DJANGO_ALLOWED_HOSTS=localhost,127.0.0.1
 
-# Database (PostgreSQL)
-DB_NAME=council_portal
-DB_USER=postgres
-DB_PASSWORD=postgres
-DB_HOST=db
-DB_PORT=5432
+# Database — leave POSTGRES_HOST blank for the SQLite dev fallback
+POSTGRES_DB=council_portal
+POSTGRES_USER=postgres
+POSTGRES_PASSWORD=postgres
+POSTGRES_HOST=db
+POSTGRES_PORT=5432
 
 # CORS
 CORS_ALLOWED_ORIGINS=http://localhost:3000
-
-# JWT
-JWT_ACCESS_TOKEN_LIFETIME_MINUTES=60
-JWT_REFRESH_TOKEN_LIFETIME_DAYS=7
 ```
+
+Loading order: `python/.env` → `authentik/.env` (OIDC keys only, local dev) →
+`CMS/.env.local` (Supabase keys only, local dev). The two sibling-repo files are
+optional conveniences — a clean clone with no `/CMS`, `/authentik` or `/php`
+works entirely from `python/.env`.
 
 ### Frontend (`.env.local`)
 
