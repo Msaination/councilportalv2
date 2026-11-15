@@ -47,7 +47,8 @@ def fetch_complaints_for_ward(ward, *, limit=100):
     if config is None:
         logger.warning(
             'Complaints gateway skipped: SUPABASE_URL / '
-            'SUPABASE_SERVICE_ROLE_KEY not configured.',
+            'SUPABASE_SECRET_KEY (or SUPABASE_SERVICE_ROLE_KEY) '
+            'not configured.',
         )
         return None  # None = not configured (distinct from "no rows")
 

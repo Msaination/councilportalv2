@@ -200,11 +200,17 @@ if _cms_env.is_file():
             _key, _, _value = _line.partition('=')
             _key = _key.strip()
             if _key in ('NEXT_PUBLIC_SUPABASE_URL',
-                        'SUPABASE_SERVICE_ROLE_KEY') and _key not in os.environ:
+                        'NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY',
+                        'SUPABASE_SERVICE_ROLE_KEY',
+                        'SUPABASE_SECRET_KEY') and _key not in os.environ:
                 os.environ[_key] = _value.strip()
 
 SUPABASE_URL = os.environ.get('NEXT_PUBLIC_SUPABASE_URL', '')
-SUPABASE_SERVICE_ROLE_KEY = os.environ.get('SUPABASE_SERVICE_ROLE_KEY', '')
+# Supabase renamed the server-only key: accept both variable names.
+SUPABASE_SERVICE_ROLE_KEY = (
+    os.environ.get('SUPABASE_SERVICE_ROLE_KEY')
+    or os.environ.get('SUPABASE_SECRET_KEY', '')
+)
 if 'test' in sys.argv:
     SUPABASE_SERVICE_ROLE_KEY = ''
 

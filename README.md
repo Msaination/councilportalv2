@@ -270,6 +270,21 @@ NEXT_PUBLIC_SITE_NAME=ECOP
 NEXT_PUBLIC_SITE_URL=http://localhost:3000
 ```
 
+### CMS / Supabase (`CMS/.env.local`, never committed)
+
+```bash
+NEXT_PUBLIC_SUPABASE_URL=https://<project>.supabase.co
+NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=<publishable-key>
+# Server-only. Supabase's newer name is SUPABASE_SECRET_KEY.
+SUPABASE_SECRET_KEY=<secret-key>
+# Legacy name still supported: SUPABASE_SERVICE_ROLE_KEY
+```
+
+The Django complaints gateway reads `SUPABASE_URL` and
+`SUPABASE_SERVICE_ROLE_KEY`/`SUPABASE_SECRET_KEY` from its environment (or
+the ignored `CMS/.env.local` in local development). Only the server-side
+key may be used there — never expose the secret key to the browser.
+
 ---
 
 ## Docker Deployment
