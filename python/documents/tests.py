@@ -12,10 +12,11 @@ from datetime import timedelta
 from django.contrib.auth.models import Group, Permission, User
 from django.contrib.contenttypes.models import ContentType
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.test import override_settings
+from django.test import TestCase, override_settings
 from django.utils import timezone
 from rest_framework.test import APITestCase
 
+from .admin import StoredFileAdminForm
 from .models import (
     Category, StoredFile, SharedLink, Comment, Rating, DownloadLog, UploadLog,
 )
@@ -135,6 +136,51 @@ class CategoryApiTests(PortalTestCase):
     def test_anonymous_access_is_rejected(self):
         response = self.client.get('/api/categories/')
         self.assertEqual(response.status_code, 401)
+
+
+class StoredFileAdminFormTests(TestCase):
+    """Admin must explain missing payloads instead of raising the DB constraint."""
+
+    def setUp(self):
+        self.category = Category.objects.create(
+            title='Policies', slug='policies',
+        )
+
+    def build_form(self, storage, files=None, **overrides):
+        data = {
+            'title': 'By-law',
+            'slug': 'by-law',
+            'description': '',
+            'category': self.category.pk,
+            'storage': storage,
+            'is_published': 'on',
+        }
+        data.update(overrides)
+        return StoredFileAdminForm(data=data, files=files)
+
+    def test_local_resource_requires_an_upload(self):
+        form = self.build_form(StoredFile.StorageKind.LOCAL)
+        self.assertFalse(form.is_valid())
+        self.assertIn('local_file', form.errors)
+
+    def test_external_resource_requires_a_url(self):
+        form = self.build_form(StoredFile.StorageKind.EXTERNAL)
+        self.assertFalse(form.is_valid())
+        self.assertIn('external_url', form.errors)
+
+    def test_external_resource_accepts_a_url(self):
+        form = self.build_form(
+            StoredFile.StorageKind.EXTERNAL,
+            external_url='https://example.com/policy.pdf',
+        )
+        self.assertTrue(form.is_valid(), form.errors)
+
+    def test_local_resource_accepts_an_upload(self):
+        form = self.build_form(
+            StoredFile.StorageKind.LOCAL,
+            files={'local_file': SimpleUploadedFile('policy.txt', b'policy')},
+        )
+        self.assertTrue(form.is_valid(), form.errors)
 
 
 class FileApiTests(PortalTestCase):

@@ -1,7 +1,74 @@
+from django import forms
 from django.contrib import admin
+
 from .models import (
     Category, StoredFile, SharedLink, Comment, Rating, DownloadLog, UploadLog,
 )
+
+
+class StoredFileAdminForm(forms.ModelForm):
+    """Validate the resource payload before the database check constraint.
+
+    StoredFile requires either a local upload or an external URL, depending
+    on its storage kind. Enforcing that here turns a raw
+    ``file_has_payload`` IntegrityError into a field-level admin error.
+    """
+
+    class Meta:
+        model = StoredFile
+        fields = (
+            'title', 'slug', 'description', 'category', 'team',
+            'storage', 'local_file', 'external_url',
+            'is_published', 'access_groups', 'access_users', 'owner',
+        )
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields['category'].help_text = (
+            'Select the resource category this resource belongs to.'
+        )
+        self.fields['storage'].help_text = (
+            'Local file: upload a file. External: provide a full URL.'
+        )
+        self.fields['local_file'].help_text = (
+            'Required when storage is "Local file".'
+        )
+        self.fields['external_url'].help_text = (
+            'Required when storage is "External (URL)".'
+        )
+        self.fields['owner'].required = False
+        self.fields['owner'].help_text = (
+            'Optional — defaults to the admin creating the resource.'
+        )
+
+    def clean(self):
+        cleaned_data = super().clean()
+        storage = cleaned_data.get('storage')
+        external_url = (cleaned_data.get('external_url') or '').strip()
+        local_file = cleaned_data.get('local_file')
+
+        # FileField returns False when the admin's "Clear" checkbox is used.
+        if local_file is False:
+            has_local_file = False
+        else:
+            has_local_file = bool(local_file) or bool(
+                self.instance.pk and self.instance.local_file
+            )
+
+        if storage == StoredFile.StorageKind.EXTERNAL:
+            if not external_url:
+                self.add_error(
+                    'external_url',
+                    'Enter the full URL for this external resource.',
+                )
+        elif storage == StoredFile.StorageKind.LOCAL:
+            if not has_local_file:
+                self.add_error(
+                    'local_file',
+                    'Choose a file to upload, or switch storage to '
+                    '"External (URL)".',
+                )
+        return cleaned_data
 
 
 @admin.register(Category)
@@ -16,6 +83,7 @@ class CategoryAdmin(admin.ModelAdmin):
 
 @admin.register(StoredFile)
 class StoredFileAdmin(admin.ModelAdmin):
+    form = StoredFileAdminForm
     list_display = ('title', 'category', 'storage', 'filesize',
                     'mime_type', 'is_published', 'download_count', 'created')
     list_filter = ('storage', 'is_published', 'category', 'created')
@@ -23,6 +91,11 @@ class StoredFileAdmin(admin.ModelAdmin):
     prepopulated_fields = {'slug': ('title',)}
     filter_horizontal = ('access_groups', 'access_users')
     raw_id_fields = ('owner',)
+
+    def save_model(self, request, obj, form, change):
+        if obj.owner_id is None:
+            obj.owner = request.user
+        super().save_model(request, obj, form, change)
 
 
 @admin.register(SharedLink)
