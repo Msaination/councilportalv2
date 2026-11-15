@@ -36,11 +36,11 @@ A full-stack Digital Asset Management (DAM) platform for municipal councils, bui
 
 | Category | Features |
 |---|---|
-| **Asset Management** | Upload, organize into collections, preview (PDF/img/audio/video), download tracking |
-| **Multi-tenancy** | Teams/workspaces with isolated asset storage |
+| **Asset Management** | Upload, organize resources into categories, preview (PDF/img/audio/video), download tracking |
+| **Multi-tenancy** | Committees/workspaces with isolated resource storage |
 | **ACL** | Group/user-level access control on categories and files |
 | **Social** | Comments, ratings (1–5 stars), activity feeds |
-| **Admin Dashboard** | Statistics dashboard, user/team management, audit trail |
+| **Admin Dashboard** | Statistics dashboard, user/committee management, audit trail |
 | **Client Sharing** | Time-limited, password-protected share links |
 | **Authentication** | JWT tokens (Simple JWT) with session auth fallback |
 
@@ -149,11 +149,11 @@ curl http://127.0.0.1:8000/api/categories/ \
 | `/api/shared-links/` | GET/DELETE | List/revoke your share links |
 | `/api/shared/<token>/` | GET (public) | Share metadata (password-gated) |
 | `/api/shared/<token>/download/` | GET (public) | Public download/preview + logging |
-| `/api/teams/` | GET/POST | List your teams / create a team |
-| `/api/teams/<slug>/` | GET/PATCH/DELETE | Team detail, rename, delete (owner) |
-| `/api/teams/<slug>/members/` | GET/POST | List / add members |
-| `/api/teams/<slug>/members/<user_id>/` | DELETE | Remove a member |
-| `/api/teams/<slug>/switch/` | POST | Set the active workspace |
+| `/api/teams/` | GET/POST | List your committees / create a committee |
+| `/api/teams/<slug>/` | GET/PATCH/DELETE | Committee detail, rename, delete (owner) |
+| `/api/teams/<slug>/members/` | GET/POST | List / add committee members |
+| `/api/teams/<slug>/members/<user_id>/` | DELETE | Remove a committee member |
+| `/api/teams/<slug>/switch/` | POST | Set the active committee workspace |
 | `/api/access/users/` | GET/POST | List users / create user (superadmin, default password) |
 | `/api/access/users/<id>/` | PATCH | Superadmin: capabilities; assigned editors: employee number |
 | `/api/profile/` | GET/PATCH | Own profile (username, email, employee no., cell, bio, avatar) |
@@ -305,37 +305,57 @@ Both repositories use the same branch model:
 | `main` | Production-ready code |
 | `staging` | Pre-production / integration testing |
 
-The parent repo pins an **exact frontend commit** through the submodule, so each parent branch controls precisely which UI commit it deploys.
+The parent repo pins an **exact frontend commit** through the submodule, so each parent branch controls precisely which UI commit it deploys. GitHub Actions validates Django changes in the parent repository and lint, type-checks, and builds the frontend in the frontend repository. Both CI workflows run for pushes and pull requests targeting `staging` or `main`.
 
-### Frontend change flow (staging)
+### Change flow (staging)
 ```bash
 git switch staging
+git pull --ff-only origin staging
+git switch -c feature/short-description
 git submodule update --init --recursive
 
 cd frontend
 git switch staging
-# edit, commit, and push the UI changes
-git push origin staging
+git pull --ff-only origin staging
+git switch -c feature/short-description
+# edit and commit the UI changes
+git push -u origin feature/short-description
+# Open a pull request from the frontend feature branch to staging
+# Merge it after frontend CI passes
 
 cd ..
+# After the frontend PR merges, refresh the submodule to the new staging commit
+git -C frontend switch staging
+git -C frontend pull --ff-only origin staging
 git add frontend
-git commit -m "chore: bump frontend (staging)"
-git push origin staging
+# Commit the updated submodule pointer with any backend changes
+git commit -m "chore: update frontend submodule"
+git push -u origin feature/short-description
+# Open a pull request from the parent feature branch to staging
+# Merge it after backend CI passes
 ```
 
 ### Promote staging to main
 ```bash
-# 1. Promote the UI
+# In GitHub, open and merge a staging-to-main pull request in the frontend repo
+git -C frontend fetch origin
 git -C frontend switch main
-git -C frontend merge --ff-only staging
-git -C frontend push origin main
+git -C frontend pull --ff-only origin main
 
-# 2. Record the new UI commit in the parent repo
-git switch main
+# Update the parent staging branch through a feature branch
+git switch staging
+git pull --ff-only origin staging
+git switch -c chore/promote-frontend
+git -C frontend checkout main
+git -C frontend pull --ff-only origin main
 git add frontend
-git commit -m "chore: bump frontend for main"
-git push origin main
+git commit -m "chore: update frontend submodule"
+git push -u origin chore/promote-frontend
+# Open and merge a parent-repository PR from the feature branch to staging
+# Then open and merge a staging-to-main PR after backend CI passes
 ```
+
+Protect `staging` and `main` in both GitHub repositories: require pull requests, require the `Backend CI / test` or `Frontend CI / validate` check as appropriate, and disallow force pushes. Use `staging` for integration and deploy it to a test environment; promote to `main` only after acceptance. Configure deployment jobs separately once the hosting target and required secrets are defined.
 
 ### Deploy staging
 ```bash

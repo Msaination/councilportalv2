@@ -102,6 +102,18 @@ class TeamCrudTests(TeamApiTestCase):
         self.client.force_authenticate(self.admin)
         self.assertEqual(len(results(self.client.get('/api/teams/'))), 1)
 
+    def test_member_can_list_teams_without_explicit_view_permission(self):
+        team = Team.objects.create(name='Beta', created_by=self.owner)
+        Membership.objects.create(team=team, user=self.member)
+        self.member.user_permissions.clear()
+        self.client.force_authenticate(self.member)
+
+        response = self.client.get('/api/teams/')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(results(response)), 1)
+        self.assertEqual(results(response)[0]['name'], 'Beta')
+
     def test_detail_404_for_non_member(self):
         self.create_team()
         self.client.force_authenticate(self.outsider)
@@ -144,11 +156,18 @@ class TeamCrudTests(TeamApiTestCase):
 
 
 class CapabilityTests(TeamApiTestCase):
-    def test_team_endpoints_require_capability(self):
+    def test_team_list_and_create_do_not_require_view_capability(self):
         self.client.force_authenticate(self.unprivileged)
-        self.assertEqual(self.client.get('/api/teams/').status_code, 403)
-        self.assertEqual(self.client.post(
-            '/api/teams/', {'name': 'X'}, format='json').status_code, 403)
+        response = self.client.get('/api/teams/')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['results'], [])
+        response = self.client.post(
+            '/api/teams/', {'name': 'X'}, format='json')
+        self.assertEqual(response.status_code, 201)
+        self.assertTrue(Membership.objects.filter(
+            team__slug='x', user=self.unprivileged,
+            role=Membership.Role.OWNER,
+        ).exists())
 
     def test_superadmin_only_access_management(self):
         self.client.force_authenticate(self.owner)
@@ -180,7 +199,7 @@ class CapabilityTests(TeamApiTestCase):
 
         fresh = User.objects.get(pk=self.owner.pk)
         self.client.force_authenticate(fresh)
-        self.assertEqual(self.client.get('/api/teams/').status_code, 403)
+        self.assertEqual(self.client.get('/api/teams/').status_code, 200)
 
     def test_me_reports_capabilities(self):
         self.client.force_authenticate(self.owner)
@@ -227,6 +246,48 @@ class EmployeeNumberTests(TeamApiTestCase):
             {'employee_number': 'S000010'}, format='json',
         )
         self.assertEqual(response.status_code, 400)
+
+
+class WardFieldTests(TeamApiTestCase):
+    """The ward is the join key to the CMS (PORTAL_PLAN §6.7): assigned by
+    admins like employee numbers, never self-service."""
+
+    def test_superadmin_sets_ward_via_access_endpoint(self):
+        self.client.force_authenticate(self.admin)
+        response = self.client.patch(
+            f'/api/access/users/{self.member.id}/',
+            {'ward': 12}, format='json',
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['ward'], 12)
+        self.member.profile.refresh_from_db()
+        self.assertEqual(self.member.profile.ward, 12)
+
+    def test_ward_is_readonly_in_own_profile(self):
+        profile = self.member.profile
+        profile.ward = 12
+        profile.save(update_fields=['ward'])
+
+        self.client.force_authenticate(self.member)
+        read = self.client.get('/api/profile/')
+        self.assertEqual(read.status_code, 200)
+        self.assertEqual(read.data['ward'], 12)
+
+        attempt = self.client.patch(
+            '/api/profile/', {'ward': 5}, format='json',
+        )
+        self.assertEqual(attempt.status_code, 200)
+        self.assertEqual(attempt.data['ward'], 12)  # unchanged
+
+    def test_invalid_ward_rejected(self):
+        self.client.force_authenticate(self.admin)
+        for invalid in (0, -1, 1000):
+            with self.subTest(ward=invalid):
+                response = self.client.patch(
+                    f'/api/access/users/{self.member.id}/',
+                    {'ward': invalid}, format='json',
+                )
+                self.assertEqual(response.status_code, 400)
 
 
 class ForcedPasswordChangeTests(TeamApiTestCase):
@@ -482,6 +543,14 @@ class TeamMemberTests(TeamApiTestCase):
         self.client.force_authenticate(self.member)
         response = self.client.post(
             '/api/teams/alpha/members/', {'username': 'outsider'}, format='json',
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_plain_member_cannot_remove_other_members(self):
+        Membership.objects.create(team=self.team, user=self.member)
+        self.client.force_authenticate(self.member)
+        response = self.client.delete(
+            f'/api/teams/alpha/members/{self.owner.id}/',
         )
         self.assertEqual(response.status_code, 403)
 

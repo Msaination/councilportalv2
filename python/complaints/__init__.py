@@ -1,0 +1,1 @@
+# Complaints gateway — reads the CMS's Supabase-backed complaints (PORTAL_PLAN §6.3 Phase 2).

@@ -52,6 +52,7 @@ INSTALLED_APPS = [
     'accounts',
     'documents',
     'calendar_app',
+    'complaints',
 ]
 
 AUTHENTICATION_BACKENDS = [
@@ -187,6 +188,25 @@ AUTHENTIK_API_URL = os.environ.get('AUTHENTIK_API_URL', 'http://localhost:9080')
 AUTHENTIK_ADMIN_TOKEN = os.environ.get('AUTHENTIK_ADMIN_TOKEN', '')
 if 'test' in sys.argv:
     AUTHENTIK_API_URL = ''
+
+# ─── Complaints gateway → Supabase (CMS data backend, §6.7) ─
+# Pick up the CMS repo's .env.local so credentials are never duplicated into
+# this repo. Existing env vars always win. Tests never call the real DB.
+_cms_env = BASE_DIR.parent / 'CMS' / '.env.local'
+if _cms_env.is_file():
+    for _line in _cms_env.read_text().splitlines():
+        _line = _line.strip()
+        if _line and not _line.startswith('#') and '=' in _line:
+            _key, _, _value = _line.partition('=')
+            _key = _key.strip()
+            if _key in ('NEXT_PUBLIC_SUPABASE_URL',
+                        'SUPABASE_SERVICE_ROLE_KEY') and _key not in os.environ:
+                os.environ[_key] = _value.strip()
+
+SUPABASE_URL = os.environ.get('NEXT_PUBLIC_SUPABASE_URL', '')
+SUPABASE_SERVICE_ROLE_KEY = os.environ.get('SUPABASE_SERVICE_ROLE_KEY', '')
+if 'test' in sys.argv:
+    SUPABASE_SERVICE_ROLE_KEY = ''
 
 # NOTE: Authentik puts authorize/token/userinfo at /application/o/<action>/
 # (no app slug), while issuer-scoped endpoints (jwks, end-session) include it.

@@ -1,0 +1,64 @@
+<mxfile host="Electron">
+  <diagram name="Page-1" id="d053TSkwdAhw9FjFa3XO">
+    <mxGraphModel dx="1174" dy="882" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="850" pageHeight="1100" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="5nIyX5caLF1uN_c5qjmS-1" parent="1" style="shape=umlActor;verticalLabelPosition=bottom;verticalAlign=top;html=1;outlineConnect=0;" value="Councillor" vertex="1">
+          <mxGeometry height="60" width="30" x="100" y="150" as="geometry" />
+        </mxCell>
+        <mxCell id="5nIyX5caLF1uN_c5qjmS-5" connectable="0" parent="1" style="group" value="" vertex="1">
+          <mxGeometry height="120" width="80" x="340" y="140" as="geometry" />
+        </mxCell>
+        <mxCell id="5nIyX5caLF1uN_c5qjmS-2" parent="5nIyX5caLF1uN_c5qjmS-5" style="shape=internalStorage;whiteSpace=wrap;html=1;backgroundOutline=1;" value="" vertex="1">
+          <mxGeometry height="80" width="80" as="geometry" />
+        </mxCell>
+        <mxCell id="5nIyX5caLF1uN_c5qjmS-4" parent="5nIyX5caLF1uN_c5qjmS-5" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;rounded=0;" value="Councillor Portal" vertex="1">
+          <mxGeometry height="30" width="60" x="10" y="90" as="geometry" />
+        </mxCell>
+        <mxCell id="5nIyX5caLF1uN_c5qjmS-6" parent="1" style="strokeWidth=2;html=1;shape=mxgraph.flowchart.database;whiteSpace=wrap;" value="" vertex="1">
+          <mxGeometry height="90" width="60" x="560" y="190" as="geometry" />
+        </mxCell>
+        <mxCell id="5nIyX5caLF1uN_c5qjmS-7" parent="1" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;rounded=0;" value="Postgress" vertex="1">
+          <mxGeometry height="30" width="60" x="560" y="280" as="geometry" />
+        </mxCell>
+        <mxCell id="5nIyX5caLF1uN_c5qjmS-8" connectable="0" parent="1" style="group" value="" vertex="1">
+          <mxGeometry height="120" width="80" x="340" y="300" as="geometry" />
+        </mxCell>
+        <mxCell id="5nIyX5caLF1uN_c5qjmS-9" parent="5nIyX5caLF1uN_c5qjmS-8" style="shape=internalStorage;whiteSpace=wrap;html=1;backgroundOutline=1;" value="" vertex="1">
+          <mxGeometry height="80" width="80" as="geometry" />
+        </mxCell>
+        <mxCell id="5nIyX5caLF1uN_c5qjmS-10" parent="5nIyX5caLF1uN_c5qjmS-8" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;rounded=0;" value="CMS" vertex="1">
+          <mxGeometry height="30" width="60" x="10" y="90" as="geometry" />
+        </mxCell>
+        <mxCell id="5nIyX5caLF1uN_c5qjmS-11" parent="1" style="swimlane;fontStyle=0;childLayout=stackLayout;horizontal=1;startSize=30;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=1;marginBottom=0;whiteSpace=wrap;html=1;" value="Coucil Portal" vertex="1">
+          <mxGeometry height="120" width="140" x="680" y="110" as="geometry" />
+        </mxCell>
+        <mxCell id="5nIyX5caLF1uN_c5qjmS-12" parent="5nIyX5caLF1uN_c5qjmS-11" style="text;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=4;spacingRight=4;overflow=hidden;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;rotatable=0;whiteSpace=wrap;html=1;" value="Meetings" vertex="1">
+          <mxGeometry height="30" width="140" y="30" as="geometry" />
+        </mxCell>
+        <mxCell id="5nIyX5caLF1uN_c5qjmS-14" parent="5nIyX5caLF1uN_c5qjmS-11" style="text;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=4;spacingRight=4;overflow=hidden;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;rotatable=0;whiteSpace=wrap;html=1;" value="Agenda" vertex="1">
+          <mxGeometry height="30" width="140" y="60" as="geometry" />
+        </mxCell>
+        <mxCell id="5nIyX5caLF1uN_c5qjmS-13" parent="5nIyX5caLF1uN_c5qjmS-11" style="text;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=4;spacingRight=4;overflow=hidden;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;rotatable=0;whiteSpace=wrap;html=1;" value="Annextures" vertex="1">
+          <mxGeometry height="30" width="140" y="90" as="geometry" />
+        </mxCell>
+        <mxCell id="5nIyX5caLF1uN_c5qjmS-15" parent="1" style="swimlane;fontStyle=0;childLayout=stackLayout;horizontal=1;startSize=30;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=1;marginBottom=0;whiteSpace=wrap;html=1;" value="CMS" vertex="1">
+          <mxGeometry height="120" width="140" x="680" y="290" as="geometry" />
+        </mxCell>
+        <mxCell id="5nIyX5caLF1uN_c5qjmS-16" parent="5nIyX5caLF1uN_c5qjmS-15" style="text;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=4;spacingRight=4;overflow=hidden;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;rotatable=0;whiteSpace=wrap;html=1;" value="Complaints" vertex="1">
+          <mxGeometry height="30" width="140" y="30" as="geometry" />
+        </mxCell>
+        <mxCell id="5nIyX5caLF1uN_c5qjmS-17" parent="5nIyX5caLF1uN_c5qjmS-15" style="text;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=4;spacingRight=4;overflow=hidden;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;rotatable=0;whiteSpace=wrap;html=1;" value="Wards" vertex="1">
+          <mxGeometry height="30" width="140" y="60" as="geometry" />
+        </mxCell>
+        <mxCell id="5nIyX5caLF1uN_c5qjmS-18" parent="5nIyX5caLF1uN_c5qjmS-15" style="text;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=4;spacingRight=4;overflow=hidden;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;rotatable=0;whiteSpace=wrap;html=1;" value="Dashboard" vertex="1">
+          <mxGeometry height="30" width="140" y="90" as="geometry" />
+        </mxCell>
+        <mxCell id="5nIyX5caLF1uN_c5qjmS-19" parent="1" style="sketch=0;verticalLabelPosition=bottom;sketch=0;aspect=fixed;html=1;verticalAlign=top;strokeColor=none;fillColor=#000000;align=center;outlineConnect=0;pointerEvents=1;shape=mxgraph.citrix2.authentication_oidc;" value="" vertex="1">
+          <mxGeometry height="50" width="50" x="230" y="160" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

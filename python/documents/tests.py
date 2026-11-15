@@ -24,9 +24,15 @@ TEST_MEDIA_ROOT = tempfile.mkdtemp()
 
 
 def make_user(username, **kwargs):
-    return User.objects.create_user(
+    user = User.objects.create_user(
         username=username, password='pass12345', **kwargs,
     )
+    # The creation signal forces a first-login password change; these tests
+    # model already-onboarded users (same approach as accounts.onboard).
+    profile = user.profile
+    profile.must_change_password = False
+    profile.save(update_fields=['must_change_password'])
+    return user
 
 
 def results(response):

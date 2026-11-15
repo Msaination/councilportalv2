@@ -1,4 +1,4 @@
-"""Team / workspace API: list, create, members, and switching."""
+"""Committee workspace API: list, create, members, and switching."""
 
 from django.contrib.auth import get_user_model
 from rest_framework import mixins, permissions, status, viewsets
@@ -23,10 +23,10 @@ DEFAULT_NEW_USER_PASSWORD = 'Password#v2cp2026'
 
 
 class TeamViewSet(viewsets.ModelViewSet):
-    """Teams the requesting user belongs to (requires view_teams)."""
+    """Committees the requesting user belongs to."""
     serializer_class = TeamSerializer
     permission_classes = [
-        permissions.IsAuthenticated, CanViewTeams, PasswordChangeRequired,
+        permissions.IsAuthenticated, PasswordChangeRequired,
     ]
     lookup_field = 'slug'
 
@@ -34,12 +34,13 @@ class TeamViewSet(viewsets.ModelViewSet):
         qs = Team.objects.prefetch_related('memberships__user')
         if self.request.user.is_staff:
             return qs
-        return qs.filter(memberships__user=self.request.user)
+        return qs.filter(memberships__user=self.request.user).distinct()
 
     def _membership(self, team):
         return team.memberships.filter(user=self.request.user).first()
 
     def _can_manage(self, team):
+        """Only owners/admins (or staff) can mutate committee membership."""
         membership = self._membership(team)
         return self.request.user.is_staff or bool(
             membership and membership.can_manage,
@@ -64,12 +65,12 @@ class TeamViewSet(viewsets.ModelViewSet):
         return super().update(request, *args, **kwargs)
 
     def destroy(self, request, *args, **kwargs):
-        """Delete a team and its assets — owner or staff only."""
+        """Delete a committee and its resources — owner or staff only."""
         team = self.get_object()
         membership = self._membership(team)
         is_owner = membership and membership.role == Membership.Role.OWNER
         if not (request.user.is_staff or is_owner):
-            return Response({'detail': 'Only the owner can delete a team.'},
+            return Response({'detail': 'Only the owner can delete a committee.'},
                             status=status.HTTP_403_FORBIDDEN)
         return super().destroy(request, *args, **kwargs)
 
@@ -120,7 +121,7 @@ class TeamViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['post'], url_path='switch')
     def switch(self, request, slug=None):
-        """Make this team the user's active workspace."""
+        """Make this committee the user's active workspace."""
         team = self.get_object()
         profile, _ = UserProfile.objects.get_or_create(user=request.user)
         profile.active_team = team
@@ -186,7 +187,8 @@ class UserAccessViewSet(mixins.ListModelMixin,
 @parser_classes([MultiPartParser, FormParser, JSONParser])
 def my_profile(request):
     """Read or update the requesting user's own profile."""
-    UserProfile.objects.get_or_create(user=request.user)
+    profile, _ = UserProfile.objects.get_or_create(user=request.user)
+    request.user.profile = profile
 
     if request.method == 'GET':
         return Response(ProfileSerializer(
@@ -215,8 +217,10 @@ def change_password(request):
     # accounts.signals mirrors the new hash to Authentik automatically.
 
     profile, _ = UserProfile.objects.get_or_create(user=request.user)
+    request.user.profile = profile
     if profile.must_change_password:
         profile.must_change_password = False
         profile.save(update_fields=['must_change_password'])
+        request.user.profile = profile
 
     return Response({'detail': 'Password updated.'})

@@ -485,20 +485,31 @@ Councillor ──logs in once──▶ Portal (Next.js) ──JWT──▶ Djang
 
 ### 6.3 Phased workflow
 
-1. **Discovery (no code)**
+1. **Discovery (no code)** — *partially done 2026-11-12 (see §6.7 for
+   results):* 
    - Does the CMS expose a REST/GraphQL API, or only a UI? (Probe `/api/*`.)
+     → **No API found**: `/api`, `/api/complaints`, `/api/wards`,
+     `/api/health` all 404; root redirects to `/login`.
+   - Supabase identified as the CMS data backend: project ref
+     `hnubeqlosizpsfbjblnr.supabase.co` (found in the served JS bundle).
    - **SSO gate (hard requirement):** does the CMS support OIDC login? If
      not, SSO becomes a feature request to the CMS developers and Phase 2
      (service-account gateway) remains the only path for Phase 3's goal.
    - How does it authenticate (own login, JWT, session cookie)?
    - How are complaints keyed to a councillor — ward number, user ID, name?
+     → Assumed ward number (§6.7); **confirm the complaints table schema**
+     (needs credentials or the Supabase dashboard — next discovery step).
    - Data needed: list, status, dates, ward. **Read-only first** — no write-back.
-2. **Phase 2 — read-only dashboard (quick win)**
-   - Mirror/cache table in our Postgres (or live fetch, depending on volume).
-   - Django endpoint `GET /api/complaints/` — resolves logged-in councillor →
-     CMS identity → returns their complaints.
-   - Portal page "My Complaints" (status badges: open / in progress /
-     resolved) + dashboard widgets ("open complaints", "resolved this month").
+2. **Phase 2 — read-only dashboard (quick win)** — ✅ *implemented 2026-11-12*
+   - **Live fetch** through Django's `complaints` app: Supabase PostgREST
+     query with the CMS's service-role key (read from the CMS repo's
+     `.env.local` — never duplicated, never sent to the browser).
+   - Django endpoint `GET /api/complaints/` — resolves logged-in user →
+     `UserProfile.ward` → `WHERE ward = 'Ward <n>'` server-side.
+     503 = not configured, 502 = CMS unreachable, friendly payload when
+     no ward is assigned.
+   - Portal page **"My Complaints"** (`/dashboard/complaints`, sidebar
+     item) — status badges, ward badge, refresh, empty/error states.
 3. **Phase 3 — SSO with Authentik** (decided, see §6.6): deploy Authentik as
    the shared IdP on the municipal LAN; both the portal and the CMS
    authenticate against it. The §6.2 gateway is retained for complaint data.
@@ -581,6 +592,61 @@ flowchart TD
   only after the §6.3 discovery gate confirms the CMS supports OIDC.
 - **Phase 2 is still required** regardless — the gateway is needed for
   complaint data either way.
+
+### 6.7 Complaints ↔ councillor association — ward is the join key
+
+**Question (2026-11-12):** complaints must be associated with their ward
+and ward councillor, but councillors don't exist as rows in Supabase (CMS's
+DB). How are they linked — and does SSO solve it?
+
+**Decision: SSO is not the link. The WARD is.** SSO answers *"who is this
+person?"* (Authentik token); it does not create durable relationships
+between rows in two databases — its claims exist only for the login session.
+The association is a data join performed server-side:
+
+```
+Council Portal (source of truth)        Supabase / CMS (source of truth)
+┌──────────────────────────┐            ┌───────────────────────────┐
+│ UserProfile              │   join on  │ Complaint                 │
+ │  ward: 12        ◄──────┼────────────┼─ ward: 12                 │
+ │  employee_no: S12345    │            │  status: open             │
+ └──────────────────────────┘            └───────────────────────────┘
+        no councillor row needed in Supabase
+```
+
+**Flow:** councillor registered in portal (incl. ward) → logs in (SSO or
+password) → Django gateway resolves JWT → `profile.ward` → queries Supabase
+`WHERE ward = <their ward>` **server-side** → returns only their complaints.
+SSO's role is limited to making the *person* claiming that ward trustworthy.
+
+**Implementation status (2026-11-12):** *(discovery + Phase 2 gateway live)*
+
+- `UserProfile.ward` added (`PositiveSmallIntegerField`, migration
+  `accounts.0006`) — admin-assigned like `employee_number`, never
+  self-service (read-only on `/api/profile/`, editable via
+  `/api/access/users/` under the same `edit_employee_numbers` gate).
+  Exposed in Django admin (list + filter).
+- Discovery **complete**: CMS source lives in the workspace (`CMS/`) —
+  no REST API of its own; data lives in Supabase
+  (`hnubeqlosizpsfbjblnr`), credentials in gitignored `CMS/.env.local`
+  (service-role key). `complaints` columns: reference_number, full_name,
+  ward, subject, department(+_id), section(+_id), description, priority,
+  status, date_reported, received_channel, created_by, …
+- **Ward format quirk (live-verified):** the CMS stores wards as
+  `"Ward 12"`, not `"12"` — the gateway filters on `eq.Ward <n>`. Portal
+  stores the bare integer (`UserProfile.ward`).
+- Live statuses: `Received, New, Assigned, In Progress, Completed`
+  (+ `Escalated, Resolved` in the CMS's own status list). 19 complaints
+  across 10 wards at time of writing.
+- **Phase 2 gateway live:** `python/complaints/` (client + endpoint +
+  tests), sidebar item, `/dashboard/complaints` page. Verified end-to-end:
+  ward 12 → 2 real rows; service-role key never appears in responses
+  (asserted in tests and against the live API).
+- Remaining: set councillors' wards via `/dashboard/access`, then (later)
+  optional write-back per §6.3 Phase 4.
+
+**Never:** browser → Supabase direct (breaks §6.1/§6.4 — credentials and
+filtering would be client-side).
 
 ---
 

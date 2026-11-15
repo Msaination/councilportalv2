@@ -122,7 +122,7 @@ class CategoryViewSet(viewsets.ReadOnlyModelViewSet):
     # ─── Create / remove (admin & staff) ─────────────────────
 
     def create(self, request):
-        """Create a collection (staff/admin only).
+        """Create a resource category (staff/admin only).
 
         Body: title (required), parent slug, description, is_published.
         """
@@ -137,7 +137,7 @@ class CategoryViewSet(viewsets.ReadOnlyModelViewSet):
                             status=status.HTTP_400_BAD_REQUEST)
         if Category.objects.filter(slug=slug).exists():
             return Response(
-                {'error': f'A collection with slug "{slug}" already exists.'},
+                {'error': f'A resource category with slug "{slug}" already exists.'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -147,7 +147,7 @@ class CategoryViewSet(viewsets.ReadOnlyModelViewSet):
             try:
                 parent = Category.objects.get(slug=parent_slug)
             except Category.DoesNotExist:
-                return Response({'error': 'Parent collection not found.'},
+                return Response({'error': 'Parent resource category not found.'},
                                 status=status.HTTP_400_BAD_REQUEST)
             if not parent.can_view(request.user):
                 raise Http404()
@@ -166,9 +166,9 @@ class CategoryViewSet(viewsets.ReadOnlyModelViewSet):
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 
     def destroy(self, request, slug=None):
-        """Remove a collection and its contents (staff/admin only).
+        """Remove a resource category and its contents (staff/admin only).
 
-        Cascades to subcollections and files, matching the model FKs.
+        Cascades to subcategories and files, matching the model FKs.
         """
         category = self.get_object()  # ACL-checked, 404 if not visible
         category.delete()
@@ -678,8 +678,11 @@ def current_user(request):
         'avatar': (request.build_absolute_uri(profile.avatar.url)
                    if profile.avatar else ''),
         'capabilities': {
-            'view_teams': (request.user.is_superuser or
-                           request.user.has_perm('accounts.view_teams')),
+            'view_teams': (
+                request.user.is_superuser or
+                request.user.has_perm('accounts.view_teams') or
+                request.user.team_memberships.exists()
+            ),
             'share_files': (request.user.is_superuser or
                             request.user.has_perm('documents.share_files')),
             'edit_employee_numbers': (

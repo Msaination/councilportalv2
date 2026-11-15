@@ -19,11 +19,16 @@ from django.conf.urls.static import static
 from django.contrib import admin
 from django.urls import include, path
 
+admin.site.site_header = 'Council Portal Admin'
+admin.site.site_title = 'Council Portal Admin'
+admin.site.index_title = 'Committee and resource management'
+
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('api/', include('accounts.urls')),
     path('api/', include('documents.urls')),
     path('api/', include('calendar_app.urls')),
+    path('api/', include('complaints.urls')),
 ]
 
 # Serve media files in development

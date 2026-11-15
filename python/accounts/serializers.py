@@ -1,4 +1,4 @@
-"""Serializers for teams, memberships, and the active workspace."""
+"""Serializers for committees, memberships, and the active workspace."""
 
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Permission
@@ -29,6 +29,7 @@ class MembershipSerializer(serializers.ModelSerializer):
 
 
 class TeamSerializer(serializers.ModelSerializer):
+    """Committee representation exposed to the frontend."""
     role = serializers.SerializerMethodField()
     member_count = serializers.SerializerMethodField()
     members = MembershipSerializer(source='memberships', many=True,
@@ -59,6 +60,10 @@ class UserAccessSerializer(serializers.ModelSerializer):
         source='profile.employee_number', required=False, allow_blank=True,
         allow_null=True, validators=[EMPLOYEE_NUMBER_VALIDATOR],
     )
+    ward = serializers.IntegerField(
+        source='profile.ward', required=False, allow_null=True,
+        min_value=1, max_value=999,
+    )
     must_change_password = serializers.BooleanField(
         source='profile.must_change_password', read_only=True,
     )
@@ -70,7 +75,7 @@ class UserAccessSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = User
-        fields = ('id', 'username', 'email', 'employee_number',
+        fields = ('id', 'username', 'email', 'employee_number', 'ward',
                   'must_change_password', 'is_superuser', 'capabilities',
                   'view_teams', 'share_files', 'edit_employee_numbers')
         read_only_fields = ('username', 'email', 'is_superuser')
@@ -96,16 +101,27 @@ class UserAccessSerializer(serializers.ModelSerializer):
         request = self.context['request']
         profile_data = validated_data.pop('profile', {})
 
-        if 'employee_number' in profile_data:
+        # Identity assignments (employee number, ward) share one gate: the
+        # access endpoint already requires edit_employee_numbers/superuser.
+        if 'employee_number' in profile_data or 'ward' in profile_data:
             can_edit = (request.user.is_superuser or
                         request.user.has_perm('accounts.edit_employee_numbers'))
             if not can_edit:
+                denied = ('employee_number' if 'employee_number'
+                          in profile_data else 'ward')
                 raise serializers.ValidationError({
-                    'employee_number': 'You cannot edit employee numbers.',
+                    denied: 'You cannot edit employee numbers or wards.',
                 })
             profile = instance.profile
-            profile.employee_number = profile_data['employee_number'] or None
-            profile.save(update_fields=['employee_number'])
+            updated = []
+            if 'employee_number' in profile_data:
+                profile.employee_number = profile_data['employee_number'] or None
+                updated.append('employee_number')
+            if 'ward' in profile_data:
+                profile.ward = profile_data['ward']
+                updated.append('ward')
+            profile.save(update_fields=updated)
+            instance.profile = profile
 
         for name, permission in CAPABILITY_PERMISSIONS.items():
             if name not in validated_data:
@@ -157,11 +173,12 @@ class ProfileSerializer(serializers.ModelSerializer):
     employee_number = serializers.CharField(
         source='profile.employee_number', read_only=True,
     )
+    ward = serializers.IntegerField(source='profile.ward', read_only=True)
     email = serializers.EmailField()
 
     class Meta:
         model = User
-        fields = ('id', 'username', 'email', 'employee_number',
+        fields = ('id', 'username', 'email', 'employee_number', 'ward',
                   'cell_number', 'bio', 'avatar')
         extra_kwargs = {
             'username': {'min_length': 3, 'max_length': 150},

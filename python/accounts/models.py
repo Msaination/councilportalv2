@@ -1,4 +1,4 @@
-"""Teams, memberships, and per-user workspace selection."""
+"""Committee memberships and per-user workspace selection."""
 
 from django.conf import settings
 from django.core.validators import RegexValidator
@@ -17,7 +17,7 @@ EMPLOYEE_NUMBER_VALIDATOR = RegexValidator(
 
 
 class Team(models.Model):
-    """A workspace whose categories and files are isolated from other teams."""
+    """A committee workspace whose resource categories and files are isolated."""
     name = models.CharField(max_length=120)
     slug = models.SlugField(unique=True, blank=True)
     created_by = models.ForeignKey(
@@ -28,9 +28,11 @@ class Team(models.Model):
     is_active = models.BooleanField(default=True)
 
     class Meta:
+        verbose_name = 'Committee'
+        verbose_name_plural = 'Committees'
         ordering = ['name']
         permissions = [
-            ('view_teams', 'Can view teams and their members'),
+            ('view_teams', 'Can view committees and their members'),
         ]
 
     def __str__(self):
@@ -70,6 +72,8 @@ class Membership(models.Model):
     joined_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
+        verbose_name = 'Committee membership'
+        verbose_name_plural = 'Committee memberships'
         unique_together = ('team', 'user')
         ordering = ['joined_at']
 
@@ -101,8 +105,17 @@ class UserProfile(models.Model):
     bio = models.TextField(max_length=500, blank=True)
     avatar = models.ImageField(upload_to='avatars/', blank=True)
     must_change_password = models.BooleanField(default=False)
+    # Ward councillor's ward — the join key to the Complaint Management
+    # System (PORTAL_PLAN.md §6.7): complaints are keyed by ward in
+    # Supabase; the portal owns this assignment like employee_number.
+    ward = models.PositiveSmallIntegerField(
+        null=True, blank=True,
+        help_text='Municipal ward number this user represents (if any).',
+    )
 
     class Meta:
+        verbose_name = 'User profile'
+        verbose_name_plural = 'User profiles'
         permissions = [
             ('edit_employee_numbers', 'Can edit employee numbers'),
         ]
@@ -112,7 +125,7 @@ class UserProfile(models.Model):
 
 
 def get_active_team(user):
-    """Return the user's selected team, falling back to first membership."""
+    """Return the user's selected committee, falling back to their first membership."""
     if not user.is_authenticated:
         return None
     profile, _ = UserProfile.objects.get_or_create(user=user)

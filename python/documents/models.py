@@ -1,10 +1,11 @@
 """
-Domain models for the Emalahleni Council Portal document repository.
+Domain models for the Emalahleni Council Portal resource repository.
 
-Heavily inspired by Phoca Download (Joomla).  Categories form a recursive tree;
-files live in categories and may be stored locally or on an external server.
-Access control is group/user based (Phoca-style ACL) so that a category or file
-is visible only to whitelisted groups/users (or public if unrestricted).
+Heavily inspired by Phoca Download (Joomla). Resource categories form a recursive
+storehouse tree; files live in categories and may be stored locally or on an
+external server. Access control is group/user based (Phoca-style ACL) so that a
+resource category or file is visible only to whitelisted groups/users (or public
+if unrestricted).
 """
 
 import secrets
@@ -24,7 +25,7 @@ def _can_view(obj, user):
         return True
     if not getattr(obj, 'is_published', True):
         return False
-    # Team isolation: team-scoped objects are visible to members only
+    # Committee isolation: committee-scoped objects are visible to members only
     team_id = getattr(obj, 'team_id', None)
     if team_id is not None and not user.team_memberships.filter(
             team_id=team_id).exists():
@@ -79,7 +80,8 @@ class Category(models.Model):
     )
 
     class Meta:
-        verbose_name_plural = 'categories'
+        verbose_name = 'Resource category'
+        verbose_name_plural = 'Resource categories'
         ordering = ['ordering', 'title']
 
     def __str__(self):
@@ -157,6 +159,8 @@ class StoredFile(models.Model):
         return self.can_view(user)
 
     class Meta:
+        verbose_name = 'Resource'
+        verbose_name_plural = 'Resources'
         ordering = ['-created']
         constraints = [
             models.CheckConstraint(
@@ -192,6 +196,8 @@ class SharedLink(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
+        verbose_name = 'Shared resource link'
+        verbose_name_plural = 'Shared resource links'
         ordering = ['-created_at']
         permissions = [
             ('share_files', 'Can create and manage share links'),
@@ -234,6 +240,8 @@ class Comment(models.Model):
     created = models.DateTimeField(auto_now_add=True)
 
     class Meta:
+        verbose_name = 'Comment'
+        verbose_name_plural = 'Comments'
         ordering = ['created']
 
     def __str__(self):
@@ -255,6 +263,8 @@ class Rating(models.Model):
     )
 
     class Meta:
+        verbose_name = 'Rating'
+        verbose_name_plural = 'Ratings'
         unique_together = ('content_type', 'object_id', 'user')
         ordering = ['-value']
 
