@@ -19,9 +19,9 @@ from django.conf.urls.static import static
 from django.contrib import admin
 from django.urls import include, path
 
-admin.site.site_header = 'Council Portal Admin'
-admin.site.site_title = 'Council Portal Admin'
-admin.site.index_title = 'Committee and resource management'
+admin.site.site_header = 'ECOP Admin'
+admin.site.site_title = 'ECOP Admin'
+admin.site.index_title = 'ECOP — Emalahleni Council Portal'
 
 urlpatterns = [
     path('admin/', admin.site.urls),

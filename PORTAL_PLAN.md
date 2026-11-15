@@ -1,4 +1,4 @@
-# NextGen DAM — SaaS Digital Asset Management Platform
+# ECOP — Emalahleni Council Portal
 
 A cloud-native Digital Asset Management solution: **Create once, reimagine everywhere.**
 
@@ -163,7 +163,7 @@ Rule of thumb: **hierarchy lives in the folder tree, not in the group tree.**
 
 ## Current Status: MVP Core Complete
 
-### ✅ Phase 1-8 (Emalahleni Council Portal → DAM Foundation)
+### ✅ Phase 1-8 (ECOP Foundation)
 All 8 phases complete. The existing `documents` app (Category, StoredFile, Comment, Rating, DownloadLog, UploadLog) is the perfect foundation for DAM assets.
 
 ---

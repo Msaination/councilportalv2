@@ -1,6 +1,6 @@
-# Council Portal v2 — Digital Asset Management Platform
+# ECOP — Emalahleni Council Portal
 
-A full-stack Digital Asset Management (DAM) platform for municipal councils, built with a modern cloud-native architecture. Migrated from a legacy Phoca Download Joomla component.
+A full-stack council portal and digital asset management (DAM) platform for municipal councils, built with a modern cloud-native architecture. Migrated from a legacy Phoca Download Joomla component.
 
 ## Table of Contents
 
@@ -266,7 +266,7 @@ JWT_REFRESH_TOKEN_LIFETIME_DAYS=7
 
 ```bash
 NEXT_PUBLIC_API_URL=http://127.0.0.1:8000/api
-NEXT_PUBLIC_SITE_NAME=Council Portal
+NEXT_PUBLIC_SITE_NAME=ECOP
 NEXT_PUBLIC_SITE_URL=http://localhost:3000
 ```
 

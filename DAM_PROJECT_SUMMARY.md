@@ -1,7 +1,7 @@
-# Emalahleni Council Portal v2 — Development Summary
+# ECOP — Emalahleni Council Portal — Development Summary
 
 **Date:** November 1, 2026  
-**Project:** NextGen DAM — SaaS Digital Asset Management Platform  
+**Project:** ECOP — Emalahleni Council Portal  
 **Developer:** GitHub Copilot (Poolside: Laguna S 2.1)  
 **Status:** MVP + Access Control, Profiles & Calendar Complete — Ready for Production Hardening
 
