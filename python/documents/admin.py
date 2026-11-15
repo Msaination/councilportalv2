@@ -7,7 +7,7 @@ from .models import (
 
 
 class StoredFileAdminForm(forms.ModelForm):
-    """Validate the resource payload before the database check constraint.
+    """Validate the file payload before the database check constraint.
 
     StoredFile requires either a local upload or an external URL, depending
     on its storage kind. Enforcing that here turns a raw
@@ -25,7 +25,7 @@ class StoredFileAdminForm(forms.ModelForm):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.fields['category'].help_text = (
-            'Select the resource category this resource belongs to.'
+            'Select the resource category this file belongs to.'
         )
         self.fields['storage'].help_text = (
             'Local file: upload a file. External: provide a full URL.'
@@ -38,7 +38,7 @@ class StoredFileAdminForm(forms.ModelForm):
         )
         self.fields['owner'].required = False
         self.fields['owner'].help_text = (
-            'Optional — defaults to the admin creating the resource.'
+            'Optional — defaults to the admin creating the file.'
         )
 
     def clean(self):
@@ -59,7 +59,7 @@ class StoredFileAdminForm(forms.ModelForm):
             if not external_url:
                 self.add_error(
                     'external_url',
-                    'Enter the full URL for this external resource.',
+                    'Enter the full URL for this external file.',
                 )
         elif storage == StoredFile.StorageKind.LOCAL:
             if not has_local_file:

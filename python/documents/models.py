@@ -159,8 +159,8 @@ class StoredFile(models.Model):
         return self.can_view(user)
 
     class Meta:
-        verbose_name = 'Resource'
-        verbose_name_plural = 'Resources'
+        verbose_name = 'File'
+        verbose_name_plural = 'Files'
         ordering = ['-created']
         constraints = [
             models.CheckConstraint(
@@ -196,8 +196,8 @@ class SharedLink(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
-        verbose_name = 'Shared resource link'
-        verbose_name_plural = 'Shared resource links'
+        verbose_name = 'Shared file link'
+        verbose_name_plural = 'Shared file links'
         ordering = ['-created_at']
         permissions = [
             ('share_files', 'Can create and manage share links'),
