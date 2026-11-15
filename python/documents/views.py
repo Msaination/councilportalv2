@@ -6,6 +6,7 @@ ACL is enforced server-side on every endpoint via the model-level
 trust client-side permission checks.
 """
 
+import mimetypes
 from datetime import timedelta
 
 from django.contrib.contenttypes.models import ContentType
@@ -18,7 +19,11 @@ from rest_framework import mixins, serializers, viewsets, permissions, status
 from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.response import Response
 
-import magic  # python-magic for MIME detection
+try:
+    import magic  # python-magic; requires the native libmagic library
+    HAS_LIBMAGIC = True
+except ImportError:  # e.g. Windows without libmagic installed
+    HAS_LIBMAGIC = False
 
 from accounts.models import UserProfile, get_active_team
 from accounts.permissions import (
@@ -367,7 +372,10 @@ class StoredFileViewSet(viewsets.ReadOnlyModelViewSet):
         return errors
 
     def _mime_and_size(self, uploaded: UploadedFile):
-        mime = magic.from_buffer(uploaded.read(2048), mime=True)
+        if HAS_LIBMAGIC:
+            mime = magic.from_buffer(uploaded.read(2048), mime=True)
+        else:
+            mime = mimetypes.guess_type(uploaded.name)[0] or ''
         uploaded.seek(0)
         return {
             'mime_type': mime,
