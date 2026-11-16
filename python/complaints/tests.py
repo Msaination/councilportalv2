@@ -41,8 +41,25 @@ class SupabaseClientTests(APITestCase):
 
         self.assertEqual(len(rows), 1)
         params = get.call_args.kwargs['params']
+        headers = get.call_args.kwargs['headers']
         # CMS stores wards as "Ward 12" — plain "12" would match nothing.
         self.assertEqual(params['ward'], 'eq.Ward 12')
+        self.assertIn('Authorization', headers)
+
+    @override_settings(SUPABASE_SERVICE_ROLE_KEY='sb_secret_test-key')
+    @mock.patch('complaints.client.requests.get')
+    def test_new_secret_key_is_not_sent_as_bearer_token(self, get):
+        response = mock.Mock()
+        response.raise_for_status.return_value = None
+        response.json.return_value = []
+        get.return_value = response
+
+        from .client import fetch_complaints_for_ward
+        fetch_complaints_for_ward(12)
+
+        headers = get.call_args.kwargs['headers']
+        self.assertEqual(headers['apikey'], 'sb_secret_test-key')
+        self.assertNotIn('Authorization', headers)
 
     @override_settings(SUPABASE_SERVICE_ROLE_KEY='')
     def test_unconfigured_returns_none(self):

@@ -30,11 +30,16 @@ def _supabase_config():
     key = getattr(settings, 'SUPABASE_SERVICE_ROLE_KEY', '')
     if not url or not key:
         return None
-    return f'{url}/rest/v1', {
+    headers = {
         'apikey': key,
-        'Authorization': f'Bearer {key}',
         'Accept': 'application/json',
     }
+    # New sb_secret keys are API keys, not JWTs, and Supabase rejects them
+    # when sent as Authorization bearer tokens. Legacy service-role keys are
+    # JWTs and still require both headers for compatibility.
+    if not key.startswith('sb_secret_'):
+        headers['Authorization'] = f'Bearer {key}'
+    return f'{url}/rest/v1', headers
 
 
 def fetch_complaints_for_ward(ward, *, limit=100):
