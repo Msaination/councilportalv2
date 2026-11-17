@@ -19,18 +19,9 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 
 def _load_env_file(path, accept=None):
-    """Copy KEY=VALUE pairs from *path* into os.environ.
-
-    Real environment variables always win, so Docker, systemd or Windows
-    ``setx`` values override anything in a file. *accept*, when given, limits
-    which keys are copied — used for files owned by another app.
-
-    Returns the keys this call actually populated, so callers can tell whether
-    the file provided a value or the environment already had one.
-    """
-    loaded = set()
+    """Load KEY=VALUE pairs, without overriding real environment variables."""
     if not path.is_file():
-        return loaded
+        return
     for raw_line in path.read_text().splitlines():
         line = raw_line.strip()
         if not line or line.startswith('#') or '=' not in line:
@@ -41,14 +32,12 @@ def _load_env_file(path, accept=None):
             continue
         if key not in os.environ:
             os.environ[key] = value.strip()
-            loaded.add(key)
-    return loaded
 
 
 # App configuration: python/.env (git-ignored; see .env.example). Loaded
 # before any setting reads os.environ, so it covers Django, database, CORS and
 # third-party credentials alike.
-_APP_ENV_KEYS = _load_env_file(BASE_DIR / '.env')
+_load_env_file(BASE_DIR / '.env')
 
 
 # Quick-start development settings - unsuitable for production
@@ -215,21 +204,9 @@ AUTHENTIK_ADMIN_TOKEN = os.environ.get('AUTHENTIK_ADMIN_TOKEN', '')
 if 'test' in sys.argv:
     AUTHENTIK_API_URL = ''
 
-# ─── Complaints gateway → Supabase (CMS data backend, §6.7) ─
-# python/.env is the primary source. Only fall back to a sibling CMS clone
-# when the app env file supplied no Supabase settings at all. Tests never
-# call the real DB.
-_CMS_ENV_KEYS = frozenset({
-    'NEXT_PUBLIC_SUPABASE_URL',
-    'NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY',
-    'SUPABASE_SERVICE_ROLE_KEY',
-    'SUPABASE_SECRET_KEY',
-})
-if not _APP_ENV_KEYS & _CMS_ENV_KEYS:
-    _load_env_file(
-        BASE_DIR.parent / 'CMS' / '.env.local',
-        accept=_CMS_ENV_KEYS.__contains__,
-    )
+# ─── Complaints gateway → Supabase (§6.7) ───────────────────
+# Credentials come only from python/.env or the process environment.
+# Tests must never call the real database.
 
 SUPABASE_URL = os.environ.get('NEXT_PUBLIC_SUPABASE_URL', '')
 # Supabase renamed the server-only key: accept both variable names.
@@ -274,11 +251,14 @@ MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
 
 
-# ─── CORS (frontend on :3000 → API on :8000) ────────────────
-
+# CORS origins are comma-separated in python/.env or the process environment.
 CORS_ALLOWED_ORIGINS = [
-    "http://localhost:3000",
-    "http://127.0.0.1:3000",
+    origin.strip().rstrip('/')
+    for origin in os.environ.get(
+        'CORS_ALLOWED_ORIGINS',
+        'http://localhost:3000,http://127.0.0.1:3000',
+    ).split(',')
+    if origin.strip()
 ]
 CORS_ALLOW_CREDENTIALS = True
 

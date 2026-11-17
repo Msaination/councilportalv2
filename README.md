@@ -258,37 +258,59 @@ POSTGRES_PASSWORD=postgres
 POSTGRES_HOST=db
 POSTGRES_PORT=5432
 
-# CORS
-CORS_ALLOWED_ORIGINS=http://localhost:3000
+# CORS — comma-separated browser origins; include the deployed frontend URL
+CORS_ALLOWED_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
+
+# Supabase complaints gateway — server-only secret; never expose to frontend
+NEXT_PUBLIC_SUPABASE_URL=https://<project>.supabase.co
+SUPABASE_SECRET_KEY=sb_secret_...
+# Legacy Supabase key name is also supported:
+# SUPABASE_SERVICE_ROLE_KEY=...
 ```
 
-Loading order: `python/.env` → `authentik/.env` (OIDC keys only, local dev) →
-`CMS/.env.local` (Supabase keys only, local dev). The two sibling-repo files are
-optional conveniences — a clean clone with no `/CMS`, `/authentik` or `/php`
-works entirely from `python/.env`.
+`python/.env` is the only file-based source for database and Supabase settings.
+Actual process environment variables (Docker, systemd, or Windows `setx`)
+override values in the file. The optional `authentik/.env` fallback is only for
+local OIDC development. `/CMS` is an ignored reference directory and is not
+read by Django.
 
 ### Frontend (`.env.local`)
 
 ```bash
-NEXT_PUBLIC_API_URL=http://127.0.0.1:8000/api
+NEXT_PUBLIC_API_URL=http://127.0.0.1:8000
 NEXT_PUBLIC_SITE_NAME=ECOP
 NEXT_PUBLIC_SITE_URL=http://localhost:3000
 ```
 
-### CMS / Supabase (`CMS/.env.local`, never committed)
+`NEXT_PUBLIC_API_URL` is the Django server origin only; do not append `/api`.
+The frontend adds API paths itself. When ECOP is opened from another machine,
+loopback API URLs are resolved to the frontend's host and Django's configured
+port (default `8098`; override with `NEXT_PUBLIC_API_PORT`).
 
-```bash
-NEXT_PUBLIC_SUPABASE_URL=https://<project>.supabase.co
-NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=<publishable-key>
-# Server-only. Supabase's newer name is SUPABASE_SECRET_KEY.
-SUPABASE_SECRET_KEY=<secret-key>
-# Legacy name still supported: SUPABASE_SERVICE_ROLE_KEY
+### Windows LAN server
+
+For the current IntranetApp server (`172.20.17.16`), configure `python/.env`:
+
+```dotenv
+DJANGO_ALLOWED_HOSTS=localhost,127.0.0.1,172.20.17.16,IntranetApp
+CORS_ALLOWED_ORIGINS=http://172.20.17.16:8089,http://localhost:3000,http://127.0.0.1:3000
 ```
 
-The Django complaints gateway reads `SUPABASE_URL` and
-`SUPABASE_SERVICE_ROLE_KEY`/`SUPABASE_SECRET_KEY` from its environment (or
-the ignored `CMS/.env.local` in local development). Only the server-side
-key may be used there — never expose the secret key to the browser.
+Set `NEXT_PUBLIC_API_URL=http://172.20.17.16:8098` in the frontend's ignored
+`.env.local` before building. Run Django bound to the LAN interface and the
+frontend on the expected port:
+
+```powershell
+# API
+python manage.py runserver 0.0.0.0:8098
+
+# Frontend (from the frontend directory)
+pnpm exec next dev --hostname 0.0.0.0 --port 8089
+```
+
+Allow inbound TCP ports `8089` and `8098` in Windows Firewall for the trusted
+LAN. `runserver` and `next dev` are for intranet testing; use production-grade
+server processes behind IIS/reverse proxy for a public production deployment.
 
 ---
 

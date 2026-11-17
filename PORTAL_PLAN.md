@@ -626,15 +626,14 @@ SSO's role is limited to making the *person* claiming that ward trustworthy.
   self-service (read-only on `/api/profile/`, editable via
   `/api/access/users/` under the same `edit_employee_numbers` gate).
   Exposed in Django admin (list + filter).
-- Discovery **complete**: CMS source lives in the workspace (`CMS/`) —
-  no REST API of its own; data lives in Supabase
-  (`hnubeqlosizpsfbjblnr`), credentials in gitignored `CMS/.env.local`
-  (service-role key). `complaints` columns: reference_number, full_name,
-  ward, subject, department(+_id), section(+_id), description, priority,
-  status, date_reported, received_channel, created_by, …
-- **Ward format quirk (live-verified):** the CMS stores wards as
-  `"Ward 12"`, not `"12"` — the gateway filters on `eq.Ward <n>`. Portal
-  stores the bare integer (`UserProfile.ward`).
+- Discovery **complete**: the ignored local CMS reference directory (`CMS/`)
+  has no REST API of its own; complaint data lives in Supabase and credentials
+  are configured through `python/.env` or server environment variables.
+  Live `complaints` columns include `reference_number`, `title`, `ward_number`,
+  `issue_type`, `assigned_department`, `location_address`, `description`,
+  `priority`, `status`, `created_at`, and `received_via`.
+- **Ward format (live-verified):** `ward_number` is text containing the bare
+  number (for example `"12"`), matching `UserProfile.ward`.
 - Live statuses: `Received, New, Assigned, In Progress, Completed`
   (+ `Escalated, Resolved` in the CMS's own status list). 19 complaints
   across 10 wards at time of writing.

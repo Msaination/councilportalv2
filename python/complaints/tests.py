@@ -26,14 +26,19 @@ def make_user(username, ward=None):
     SUPABASE_SERVICE_ROLE_KEY='service-role-test-key',
 )
 class SupabaseClientTests(APITestCase):
-    """The client must speak the CMS's actual data format (§6.7)."""
+    """The client maps the live Supabase schema to the portal response."""
 
     @mock.patch('complaints.client.requests.get')
-    def test_ward_filter_uses_cms_prefix_format(self, get):
+    def test_ward_filter_uses_live_ward_number_column(self, get):
         response = mock.Mock()
         response.status_code = 200
         response.raise_for_status.return_value = None
-        response.json.return_value = [{'id': 'x', 'ward': 'Ward 12'}]
+        response.json.return_value = [{
+            'id': '00000000-0000-0000-0000-000000000001',
+            'subject': 'Pothole',
+            'ward': '12',
+            'issue_type': 'Roads',
+        }]
         get.return_value = response
 
         from .client import fetch_complaints_for_ward
@@ -42,8 +47,11 @@ class SupabaseClientTests(APITestCase):
         self.assertEqual(len(rows), 1)
         params = get.call_args.kwargs['params']
         headers = get.call_args.kwargs['headers']
-        # CMS stores wards as "Ward 12" — plain "12" would match nothing.
-        self.assertEqual(params['ward'], 'eq.Ward 12')
+        self.assertEqual(params['ward_number'], 'eq.12')
+        self.assertIn('subject:title', params['select'])
+        self.assertIn('ward:ward_number', params['select'])
+        self.assertIn('issue_type', params['select'])
+        self.assertEqual(params['order'], 'created_at.desc')
         self.assertIn('Authorization', headers)
 
     @override_settings(SUPABASE_SERVICE_ROLE_KEY='sb_secret_test-key')

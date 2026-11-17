@@ -17,10 +17,12 @@ from django.conf import settings
 logger = logging.getLogger(__name__)
 
 COMPLAINTS_TABLE = 'complaints'
-# Columns the portal dashboard renders (CMS schema: §6.7 discovery).
+# Map the live Supabase schema onto the stable field names used by the portal.
 COMPLAINT_FIELDS = (
-    'id,reference_number,subject,status,priority,ward,area,department,'
-    'section,description,received_channel,date_reported,created_at'
+    'id,reference_number,subject:title,status,priority,ward:ward_number,'
+    'area:location_address,department:assigned_department,'
+    'issue_type,description,received_channel:received_via,'
+    'date_reported:created_at,created_at'
 )
 
 
@@ -66,11 +68,10 @@ def fetch_complaints_for_ward(ward, *, limit=100):
             f'{rest_url}/{COMPLAINTS_TABLE}',
             headers=headers,
             params={
-                # CMS stores wards as "Ward 12" (verified 2026-11-12 against
-                # live data: all 19 rows use the prefixed format).
-                'ward': f'eq.Ward {ward}',
+                # ward_number is text containing the bare ward number.
+                'ward_number': f'eq.{ward}',
                 'select': COMPLAINT_FIELDS,
-                'order': 'date_reported.desc',
+                'order': 'created_at.desc',
                 'limit': str(limit),
             },
             timeout=10,
