@@ -107,7 +107,10 @@ class StoredFile(models.Model):
         EXTERNAL = 'external', 'External (URL)'
 
     category = models.ForeignKey(
-        Category, on_delete=models.CASCADE, related_name='files',
+        Category, null=True, blank=True,
+        on_delete=models.SET_NULL, related_name='files',
+        help_text='Optional file category. Files without one belong to the '
+                  'root Files area.',
     )
     title = models.CharField(max_length=255)
     slug = models.SlugField()
@@ -151,8 +154,10 @@ class StoredFile(models.Model):
         return self.title
 
     def can_view(self, user):
-        """Files inherit their category's ACL as well as their own."""
-        return _can_view(self, user) and _can_view(self.category, user)
+        """Files inherit their category's ACL when they have a category."""
+        if not _can_view(self, user):
+            return False
+        return self.category is None or _can_view(self.category, user)
 
     def can_download(self, user):
         """Alias kept for the API; same ACL gates download."""

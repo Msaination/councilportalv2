@@ -114,6 +114,16 @@ class AclRuleTests(PortalTestCase):
         self.assertFalse(self.restricted_cat.can_view(self.bob))
         self.assertFalse(self.restricted_file.can_view(self.bob))
 
+    def test_root_file_without_category_is_visible(self):
+        root_file = self.make_file(None, 'root-file')
+        self.assertTrue(root_file.can_view(self.bob))
+        self.assertIsNone(root_file.category)
+
+    def test_deleting_category_detaches_files_instead_of_deleting(self):
+        self.restricted_cat.delete()
+        self.restricted_file.refresh_from_db()
+        self.assertIsNone(self.restricted_file.category)
+
 
 class CategoryApiTests(PortalTestCase):
     def test_list_returns_only_visible_roots(self):
@@ -242,6 +252,24 @@ class UploadApiTests(PortalTestCase):
         uploaded = StoredFile.objects.get(title='Notes')
         self.assertTrue(UploadLog.objects.filter(
             file=uploaded, action=UploadLog.Action.CREATED).exists())
+
+    def test_upload_without_category_files_at_root(self):
+        self.client.force_authenticate(self.admin)
+        response = self.client.post('/api/files/upload/', {
+            'file': SimpleUploadedFile('root.txt', b'root', content_type='text/plain'),
+            'title': 'Root file',
+            'slug': 'root-file',
+        }, format='multipart')
+        self.assertEqual(response.status_code, 201)
+        self.assertIsNone(response.data['category'])
+        self.assertIsNone(StoredFile.objects.get(slug='root-file').category)
+
+    def test_root_filter_lists_only_uncategorised_files(self):
+        root_file = self.make_file(None, 'loose-file')
+        self.client.force_authenticate(self.bob)
+        response = self.client.get('/api/files/?category=root')
+        ids = {f['id'] for f in results(response)}
+        self.assertEqual(ids, {root_file.id})
 
     def test_replace_writes_replaced_log(self):
         self.client.force_authenticate(self.admin)

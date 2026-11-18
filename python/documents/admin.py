@@ -24,8 +24,10 @@ class StoredFileAdminForm(forms.ModelForm):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self.fields['category'].required = False
         self.fields['category'].help_text = (
-            'Select the resource category this file belongs to.'
+            'Optional file category. Leave empty to file this under the root '
+            'Files area.'
         )
         self.fields['storage'].help_text = (
             'Local file: upload a file. External: provide a full URL.'

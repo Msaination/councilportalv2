@@ -102,6 +102,7 @@ class StoredFileSerializer(serializers.ModelSerializer):
     rating_avg = serializers.SerializerMethodField()
     rating_count = serializers.SerializerMethodField()
     comment_count = serializers.SerializerMethodField()
+    category = serializers.SerializerMethodField()
 
     class Meta:
         model = StoredFile
@@ -109,7 +110,7 @@ class StoredFileSerializer(serializers.ModelSerializer):
             'id', 'title', 'slug', 'description', 'storage',
             'local_file', 'external_url', 'filesize', 'mime_type',
             'is_published', 'download_count', 'created', 'modified',
-            'preview_kind', 'can_download',
+            'preview_kind', 'can_download', 'category',
             'rating_avg', 'rating_count', 'comment_count',
         )
 
@@ -120,6 +121,16 @@ class StoredFileSerializer(serializers.ModelSerializer):
     def get_preview_kind(self, obj):
         name = obj.external_url or (obj.local_file.name if obj.local_file else '')
         return preview_kind(name)
+
+    def get_category(self, obj):
+        """The file's category, or None for a root (uncategorised) file."""
+        if obj.category is None:
+            return None
+        return {
+            'id': obj.category.id,
+            'title': obj.category.title,
+            'slug': obj.category.slug,
+        }
 
     def get_can_download(self, obj):
         user = self._user()

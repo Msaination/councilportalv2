@@ -171,9 +171,10 @@ class CategoryViewSet(viewsets.ReadOnlyModelViewSet):
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 
     def destroy(self, request, slug=None):
-        """Remove a resource category and its contents (staff/admin only).
+        """Remove a resource category (staff/admin only).
 
-        Cascades to subcategories and files, matching the model FKs.
+        Subcategories cascade. Files are detached rather than deleted —
+        they move to the root Files area (``category = NULL``).
         """
         category = self.get_object()  # ACL-checked, 404 if not visible
         category.delete()
@@ -212,10 +213,16 @@ class StoredFileViewSet(viewsets.ReadOnlyModelViewSet):
         return super().get_permissions()
 
     def get_queryset(self):
-        """Return all files — ACL filtering happens in get_object / list."""
+        """Return all files — ACL filtering happens in get_object / list.
+
+        ``?category=root`` (or ``uncategorised``) returns files that are not
+        attached to any resource category.
+        """
         qs = StoredFile.objects.select_related('category').all()
         cat_slug = self.request.query_params.get('category')
-        if cat_slug:
+        if cat_slug in ('root', 'uncategorised', 'uncategorized'):
+            qs = qs.filter(category__isnull=True)
+        elif cat_slug:
             qs = qs.filter(category__slug=cat_slug)
         return qs
 
@@ -285,7 +292,7 @@ class StoredFileViewSet(viewsets.ReadOnlyModelViewSet):
     def share(self, request, pk=None):
         """Create a public share link with optional password + expiry."""
         file_obj = self.get_object()
-        if not file_obj.category.is_shareable:
+        if file_obj.category is not None and not file_obj.category.is_shareable:
             return Response(
                 {'error': 'Sharing is disabled for this category.'},
                 status=status.HTTP_403_FORBIDDEN,
@@ -338,13 +345,13 @@ class StoredFileViewSet(viewsets.ReadOnlyModelViewSet):
 
     @action(detail=False, methods=['post'], url_path='upload')
     def upload(self, request):
-        """Upload a new file into a category (admin only).
+        """Upload a new file, optionally into a file category (admin only).
 
         Accepts multipart form:
             file        — the uploaded file
             title       — display name
             slug        — URL slug
-            category    — category slug
+            category    — optional category slug; omit to file it at the root
             description — optional
         """
         return self._do_upload(request)
@@ -401,11 +408,13 @@ class StoredFileViewSet(viewsets.ReadOnlyModelViewSet):
 
         errors.extend(self._validate_file(file_obj))
 
-        category_slug = request.data.get('category')
-        try:
-            category = Category.objects.get(slug=category_slug)
-        except (Category.DoesNotExist, TypeError):
-            errors.append('Valid category slug required.')
+        category_slug = (request.data.get('category') or '').strip()
+        category = None
+        if category_slug:
+            try:
+                category = Category.objects.get(slug=category_slug)
+            except Category.DoesNotExist:
+                errors.append('File category not found.')
 
         if errors:
             return Response({'errors': errors},
@@ -501,7 +510,10 @@ def _get_active_share(token):
         ).get(token=token)
     except SharedLink.DoesNotExist:
         raise Http404()
-    if not shared_link.is_active or not shared_link.file.category.is_shareable:
+    if not shared_link.is_active:
+        raise Http404()
+    category = shared_link.file.category
+    if category is not None and not category.is_shareable:
         raise Http404()
     return shared_link
 
