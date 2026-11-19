@@ -271,6 +271,63 @@ class UploadApiTests(PortalTestCase):
         ids = {f['id'] for f in results(response)}
         self.assertEqual(ids, {root_file.id})
 
+    def test_duplicate_file_name_gets_unique_slug(self):
+        self.client.force_authenticate(self.admin)
+        first = self._upload('notes.txt')
+        self.assertEqual(first.status_code, 201)
+        self.assertEqual(first.data['slug'], 'notes')
+
+        second = self.client.post('/api/files/upload/', {
+            'file': SimpleUploadedFile('notes.txt', b'other', content_type='text/plain'),
+        }, format='multipart')
+        self.assertEqual(second.status_code, 201)
+        self.assertEqual(second.data['slug'], 'notes-2')
+        # Filename-derived titles are suffixed so duplicates stay distinguishable.
+        self.assertEqual(second.data['title'], 'notes (2).txt')
+
+        third = self.client.post('/api/files/upload/', {
+            'file': SimpleUploadedFile('notes.txt', b'third', content_type='text/plain'),
+            'title': 'Notes',
+        }, format='multipart')
+        self.assertEqual(third.data['slug'], 'notes-3')
+        self.assertEqual(
+            StoredFile.objects.filter(slug__startswith='notes').count(), 3)
+
+    def test_bulk_delete_removes_selected_files(self):
+        self.client.force_authenticate(self.admin)
+        extra = self.make_file(self.public_cat, 'bulk-extra')
+        ids = [self.public_file.id, extra.id]
+
+        response = self.client.post(
+            '/api/files/bulk-delete/', {'ids': ids}, format='json')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['deleted'], 2)
+        self.assertFalse(StoredFile.objects.filter(pk__in=ids).exists())
+        # Unselected files are untouched.
+        self.assertTrue(StoredFile.objects.filter(
+            pk=self.restricted_file.pk).exists())
+
+    def test_bulk_delete_rejects_unknown_ids(self):
+        self.client.force_authenticate(self.admin)
+        response = self.client.post(
+            '/api/files/bulk-delete/',
+            {'ids': [self.public_file.id, 999999]},
+            format='json',
+        )
+        self.assertEqual(response.status_code, 404)
+        self.assertTrue(StoredFile.objects.filter(
+            pk=self.public_file.pk).exists())
+
+    def test_bulk_delete_requires_staff(self):
+        self.client.force_authenticate(self.alice)
+        response = self.client.post(
+            '/api/files/bulk-delete/',
+            {'ids': [self.public_file.id]},
+            format='json',
+        )
+        self.assertEqual(response.status_code, 403)
+
     def test_replace_writes_replaced_log(self):
         self.client.force_authenticate(self.admin)
         response = self.client.post(

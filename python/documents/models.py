@@ -113,7 +113,7 @@ class StoredFile(models.Model):
                   'root Files area.',
     )
     title = models.CharField(max_length=255)
-    slug = models.SlugField()
+    slug = models.SlugField(unique=True)
     description = models.TextField(blank=True)
 
     # Multi-tenancy — blank means visible to every authenticated user
@@ -158,6 +158,24 @@ class StoredFile(models.Model):
         if not _can_view(self, user):
             return False
         return self.category is None or _can_view(self.category, user)
+
+    @classmethod
+    def available_slug(cls, base, exclude_pk=None):
+        """Return *base*, or the first free ``base-2``, ``base-3`` … variant.
+
+        File names must be unique, so uploads of a duplicate name get a
+        numeric suffix instead of failing.
+        """
+        limit = cls._meta.get_field('slug').max_length
+        base = (base or 'file')[:limit]
+        taken = cls.objects.exclude(pk=exclude_pk)
+        candidate = base
+        suffix = 1
+        while taken.filter(slug=candidate).exists():
+            suffix += 1
+            tail = f'-{suffix}'
+            candidate = f'{base[:limit - len(tail)]}{tail}'
+        return candidate
 
     def can_download(self, user):
         """Alias kept for the API; same ACL gates download."""

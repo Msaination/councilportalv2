@@ -201,7 +201,7 @@ class StoredFileViewSet(viewsets.ReadOnlyModelViewSet):
         permissions.IsAuthenticated, PasswordChangeRequired,
     ]
 
-    WRITE_ACTIONS = ('upload', 'replace', 'destroy')
+    WRITE_ACTIONS = ('upload', 'replace', 'destroy', 'bulk_delete')
 
     def get_permissions(self):
         """Reads: any authenticated user. Upload/replace/remove: admin or staff."""
@@ -254,6 +254,42 @@ class StoredFileViewSet(viewsets.ReadOnlyModelViewSet):
             file_obj.local_file.delete(save=False)
         file_obj.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+    @action(detail=False, methods=['post'], url_path='bulk-delete')
+    def bulk_delete(self, request):
+        """Delete several files at once (admin & staff only).
+
+        Body: ``{"ids": [1, 2, 3]}``. Every id must resolve to a file the
+        caller can see — otherwise nothing is deleted.
+        """
+        raw_ids = request.data.get('ids')
+        if not isinstance(raw_ids, list) or not raw_ids:
+            return Response(
+                {'error': 'Provide a non-empty list of file ids.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            ids = {int(value) for value in raw_ids}
+        except (TypeError, ValueError):
+            return Response(
+                {'error': 'File ids must be integers.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        files = StoredFile.objects.filter(pk__in=ids)
+        if files.count() != len(ids):
+            return Response(
+                {'error': 'One or more files were not found.'},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        if any(not f.can_view(request.user) for f in files):
+            raise Http404()
+
+        for file_obj in files:
+            if file_obj.local_file:
+                file_obj.local_file.delete(save=False)
+            file_obj.delete()
+        return Response({'deleted': len(ids)})
 
     @action(detail=True, methods=['get'], url_path='download')
     def download(self, request, pk=None):
@@ -421,19 +457,32 @@ class StoredFileViewSet(viewsets.ReadOnlyModelViewSet):
                             status=status.HTTP_400_BAD_REQUEST)
 
         # SlugField caps at 50 chars — SQLite ignored it, Postgres enforces it.
-        slug = request.data.get('slug') or slugify(
-            file_obj.name.rsplit('.', 1)[0],
+        slug_base = slugify(
+            request.data.get('slug') or file_obj.name.rsplit('.', 1)[0],
         )
-        slug = slug[:StoredFile._meta.get_field('slug').max_length]
-        if not slug:
+        slug_base = slug_base[:StoredFile._meta.get_field('slug').max_length]
+        if not slug_base:
             errors.append('File name must contain letters or digits for a slug.')
             return Response({'errors': errors},
                             status=status.HTTP_400_BAD_REQUEST)
 
+        # File names are unique — suffix duplicates instead of rejecting them.
+        slug = StoredFile.available_slug(slug_base)
+
+        # Keep the visible title in step with an auto-suffixed slug. A title the
+        # caller typed is left alone; only filename-derived titles are adjusted.
+        provided_title = (request.data.get('title') or '').strip()
+        title = provided_title or file_obj.name
+        if not provided_title and slug != slug_base:
+            number = slug[len(slug_base):].lstrip('-')
+            stem, dot, ext = title.rpartition('.')
+            title = f'{stem} ({number}).{ext}' if dot else f'{title} ({number})'
+        title = title[:255]
+
         meta = self._mime_and_size(file_obj)
         obj = StoredFile.objects.create(
             category=category,
-            title=(request.data.get('title') or file_obj.name)[:255],
+            title=title,
             slug=slug,
             description=request.data.get('description', ''),
             storage=StoredFile.StorageKind.LOCAL,
