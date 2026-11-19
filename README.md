@@ -1,4 +1,4 @@
-# ECOP — Emalahleni Council Portal
+# ECoP — Emalahleni Council Portal
 
 A full-stack council portal and digital asset management (DAM) platform for municipal councils, built with a modern cloud-native architecture. Migrated from a legacy Phoca Download Joomla component.
 

@@ -75,9 +75,12 @@ class UserAccessSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = User
-        fields = ('id', 'username', 'email', 'employee_number', 'ward',
-                  'must_change_password', 'is_superuser', 'capabilities',
-                  'view_teams', 'share_files', 'edit_employee_numbers')
+        fields = (
+            'id', 'username', 'first_name', 'last_name',
+            'email', 'employee_number', 'ward',
+            'must_change_password', 'is_superuser', 'capabilities',
+            'view_teams', 'share_files', 'edit_employee_numbers'
+        )
         read_only_fields = ('username', 'email', 'is_superuser')
 
     def get_capabilities(self, obj):
