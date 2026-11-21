@@ -370,7 +370,7 @@ class StoredFileViewSet(viewsets.ReadOnlyModelViewSet):
 
     # ─── Upload / replace ─────────────────────────────────────
 
-    MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 MB
+    MAX_FILE_SIZE = 500 * 1024 * 1024  # 500 MB
     ALLOWED_EXTENSIONS = {
         'pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx',
         'txt', 'csv', 'zip', 'rar', '7z',

@@ -69,7 +69,7 @@ class CategoryTreeSerializer(serializers.ModelSerializer):
     class Meta:
         model = Category
         fields = ('id', 'title', 'slug', 'is_published', 'ordering',
-                  'children', 'file_count', 'can_view')
+                  'children', 'file_count', 'total_file_count', 'can_view')
 
     def _user(self):
         request = self.context.get('request')
@@ -92,6 +92,9 @@ class CategoryTreeSerializer(serializers.ModelSerializer):
             return 0
         return sum(1 for f in obj.files.filter(is_published=True)
                    if f.can_view(user))
+
+    def get_total_file_count(self, obj):
+        return obj.total_file_count()
 
 
 # ─── File ───────────────────────────────────────────────────

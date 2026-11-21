@@ -98,6 +98,13 @@ class Category(models.Model):
         return [c for c in self.children.filter(is_published=True)
                 if c.can_view(user)]
 
+    def total_file_count(self):
+        """Return the total number of files in this category and all its children."""
+        count = self.files.filter(is_published=True).count()
+        for child in self.children.all():
+            count += child.total_file_count()  # Recursive call
+        return count
+
 
 # ─── StoredFile (local or external) ─────────────────────────
 
