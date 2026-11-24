@@ -53,6 +53,12 @@ SECRET_KEY = os.environ.get(
 DEBUG = os.environ.get('DJANGO_DEBUG', '1') == '1'
 
 ALLOWED_HOSTS = os.environ.get('DJANGO_ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',')
+ALLOWED_HOSTS += [
+    '127.0.0.1',
+    'localhost',
+    '0.0.0.0',
+    '172.20.17.16',
+]
 
 
 # Application definition
@@ -253,12 +259,8 @@ MEDIA_ROOT = BASE_DIR / 'media'
 
 # CORS origins are comma-separated in python/.env or the process environment.
 CORS_ALLOWED_ORIGINS = [
-    origin.strip().rstrip('/')
-    for origin in os.environ.get(
-        'CORS_ALLOWED_ORIGINS',
-        'http://localhost:3000,http://127.0.0.1:3000',
-    ).split(',')
-    if origin.strip()
+    'http://localhost:3000',
+    'http://172.20.17.16:3002',
 ]
 CORS_ALLOW_CREDENTIALS = True
 

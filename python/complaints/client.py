@@ -81,3 +81,29 @@ def fetch_complaints_for_ward(ward, *, limit=100):
     except (requests.RequestException, ValueError) as exc:
         logger.error('Supabase complaints query failed (ward=%s): %s', ward, exc)
         return None
+
+
+def fetch_replies_for_complaint(complaint_id):
+    """Return replies for a complaint, oldest first."""
+    config = _supabase_config()
+    if config is None:
+        logger.warning('Complaints gateway skipped: Supabase not configured.')
+        return None
+
+    rest_url, headers = config
+    try:
+        response = requests.get(
+            f'{rest_url}/report_replies',
+            headers=headers,
+            params={
+                'complaint_id': f'eq.{complaint_id}',
+                'select': 'created_at,body,from_staff,user.full_name',
+                'order': 'created_at.asc',
+            },
+            timeout=10,
+        )
+        response.raise_for_status()
+        return response.json()
+    except (requests.RequestException, ValueError) as exc:
+        logger.error('Supabase replies query failed (complaint_id=%s): %s', complaint_id, exc)
+        return None

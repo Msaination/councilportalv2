@@ -4,7 +4,7 @@ A cloud-native Digital Asset Management solution: **Create once, reimagine every
 
 **Stack**: React Next.js (Server Actions + Turbopack) · Django REST Framework (JWT) · PostgreSQL · Shadcn UI · Tailwind CSS · Docker
 
-**Last updated:** 1 November 2026
+**Last updated:** 24 November 2026
 
 ---
 
@@ -27,15 +27,18 @@ A cloud-native Digital Asset Management solution: **Create once, reimagine every
 
 | Category | Features |
 |---|---|
-| **Asset Management** | Upload, organize into collections, preview (PDF/img/audio/video), download tracking |
+| **Asset Management** | Multi-file upload + drag-drop, subfolders, bulk select/delete, preview (PDF/img/audio/video), download tracking, **recursive file counts** on parent folders |
 | **Multi-tenancy** | Teams/workspaces with isolated asset storage |
 | **Client Sharing** | Time-limited, password-protected share links |
 | **Social** | Comments, ratings (1–5 stars), activity feeds |
 | **Profiles** | Self-service username, email, SA cell number, avatar, bio, password change |
-| **Calendar** | Meetings month view, My/All filter, day drill-down, links to collections/documents |
+| **Calendar** | Meetings month view with highlighted meeting days, My/All filter, day drill-down, links to collections/documents |
+| **Complaints** | Ward-scoped complaint list from the CMS gateway, status/priority chips, **collapsible reply thread** (chat view) |
 | **Access control** | Superadmin-granted capabilities, employee numbers, forced first-login password change |
 | **Data Protection** | RBAC, audit logs, file encryption at rest (planned) |
 | **Admin Panel** | Statistics dashboard, user/team management, audit trail |
+| **Meeting Archive** | Per-meeting permanent resource folder (`Archive/<year>/<meeting>/`) — **planned, see §7** |
+| **Responsive UI** | Mobile-first: off-canvas nav drawer, compact calendar grid + day agenda, stacked complaint cards |
 
 ---
 
@@ -189,6 +192,12 @@ All 8 phases + dashboard UI complete. Full stack running and verified.
 | Calendar | Meetings month view + sticky upcoming sidebar; `/dashboard/calendar` and standalone `/calendar`; My/All filter; clickable dates → day view; meeting times link to related collection/document/meeting; staff CRUD | ✅ Complete |
 | Tests | 87 backend tests (ACL, uploads, sharing, teams, capabilities, profiles, calendar) | ✅ Complete |
 | Dashboard UI | Sidebar, header, asset/collection pages | ✅ Complete |
+| Resource rename | "Collection"/"Documents" → **Resource**; "Asset" → **File**; subcategories → **Subfolders**; consistent across UI + admin | ✅ Complete |
+| Recursive file counts | `Category.total_file_count` — parent folders now report files held in their subfolders instead of `0` | ✅ Complete |
+| Mobile-first navigation | Off-canvas drawer under `md`, hamburger in header, overlay + close button, auto-close on nav click; inline sidebar on desktop | ✅ Complete |
+| Calendar redesign | Highlighted meeting days (tint + bold number + count badge + legend), compact mobile grid, per-day agenda panel, day-detail page with time rail and working `#meeting-<id>` deep links | ✅ Complete |
+| Complaint replies | `report_replies` fetched via the gateway; accordion chat view with `from_staff` styling and author attribution | ✅ Complete |
+| Complaint cards | 2-column responsive grid; icon pills for reference / department / issue type / priority / area / channel | ✅ Complete |
 
 ### Running Services
 
@@ -200,11 +209,17 @@ All 8 phases + dashboard UI complete. Full stack running and verified.
 | Admin | http://127.0.0.1:8000/admin/ (admin/admin123) |
 | JWT Login | POST http://127.0.0.1:8000/api/auth/token/ |
 
+Process management: `ecosystem.config.js` + PM2 (`pm2 start ecosystem.config.js`).
+PM2 cannot execute script paths containing spaces, so the Django app is launched
+through a space-free wrapper script rather than a path under the project folder.
+If the API port is overridden, set `NEXT_PUBLIC_API_PORT` for the frontend too.
+
 ### Next Steps (when resuming)
 
-1. **Production Docker** — fix frontend image build (`pnpm` build-script approval)
-2. **S3 storage** — `django-storages` + `boto3`
-3. **CI/CD** — GitHub Actions running `python manage.py test` + `next build`
+1. **Meeting Archive** — per-meeting permanent resource folders (design complete, see §7)
+2. **Production Docker** — fix frontend image build (`pnpm` build-script approval)
+3. **S3 storage** — `django-storages` + `boto3` (prerequisite for archive immutability)
+4. **CI/CD** — GitHub Actions running `python manage.py test` + `next build`
 
 ---
 
@@ -228,18 +243,35 @@ class Category(models.Model):
     # Ownership
     owner = models.ForeignKey(User, null=True, on_delete=models.SET_NULL,
                               related_name='owned_categories')
+    team = models.ForeignKey('accounts.Team', null=True, blank=True,
+                             on_delete=models.CASCADE, related_name='categories')
     is_published = models.BooleanField(default=True)
+    is_shareable = models.BooleanField(default=True)   # False = confidential
     ordering = models.PositiveIntegerField(default=0)
+
+    # Planned for the meeting archive (§7)
+    # is_archive  = models.BooleanField(default=False)
+    # archived_at = models.DateTimeField(null=True, blank=True)
+
+    @property
+    def total_file_count(self):
+        """Files in this category *and* all subfolders (recursive)."""
+        count = self.files.filter(is_published=True).count()
+        for child in self.children.all():
+            count += child.total_file_count
+        return count
 
 class StoredFile(models.Model):
     class StorageKind(models.TextChoices):
         LOCAL = 'local'
         EXTERNAL = 'external'
 
-    category = models.ForeignKey(Category, on_delete=models.CASCADE,
+    # Optional: files with no category live in the root Files area.
+    category = models.ForeignKey(Category, null=True, blank=True,
+                                 on_delete=models.SET_NULL,
                                  related_name='files')
     title = models.CharField(max_length=255)
-    slug = models.SlugField()
+    slug = models.SlugField(unique=True)           # auto-suffixed on collision
     description = models.TextField(blank=True)
     storage = models.CharField(choices=StorageKind.choices, default=StorageKind.LOCAL)
     local_file = models.FileField(upload_to='files/%Y/%m/', blank=True)
@@ -350,13 +382,21 @@ POST/PUT/DELETE                    admin only
 /api/objects/<ct>/<id>/comments/  GET/POST
 /api/objects/<ct>/<id>/ratings/   GET summary, POST (upsert own rating)
 
+/api/complaints/            GET    ward-scoped list (Django → Supabase gateway)
+/api/complaints/<id>/replies/ GET   reply thread for one complaint
+
 /api/admin/stats/downloads/ GET    paginated DownloadLog (admin)
 /api/admin/stats/uploads/   GET    paginated UploadLog (admin)
 /api/admin/stats/summary/   GET    totals per file/category/user
 ```
 
 Serializers expose computed fields: `preview_kind`, `can_download`,
-`rating_avg`, `rating_count`, `comment_count`.
+`rating_avg`, `rating_count`, `comment_count`, and `total_file_count`
+(recursive, on the category tree).
+
+Note: `/api/complaints/` is served by a `ViewSet` + `DefaultRouter` in
+`python/complaints/urls.py` — the replies route is a `@action(detail=True)`,
+so it only resolves under a router (a plain `path()` would 404).
 
 ### 2.5 Django admin
 
@@ -369,26 +409,40 @@ Register all models with `raw_id_fields` for ACL M2Ms; statistics via
 
 ```
 app/
-  (portal)/
-    page.tsx                     # root category tree
-    categories/[slug]/page.tsx   # subcategories + file grid/table
-    files/[id]/page.tsx          # detail: preview, comments, ratings
-    login/page.tsx
-  admin/
-    statistics/page.tsx          # downloads/uploads tables + filters
+  layout.tsx                     # root shell
+  page.tsx                       # portal root (ACL-aware category tree)
+  calendar/page.tsx              # standalone calendar
+  files/[id]/page.tsx            # file detail: preview, comments, ratings
+  login/page.tsx, login/oidc/    # password + Authentik SSO
+  logout/, share/[token]/        # logout + public share view
+  dashboard/
+    layout.tsx                   # nav drawer + header shell (auth guard)
+    page.tsx                     # stats + upcoming meetings + resources
+    access/  analytics/  assets/ assets/[id]/
+    calendar/ calendar/[date]/ calendar/meetings/[id]/
+    categories/[slug]/           # ⚠ relocated from app/categories/
+    collections/ collections/[slug]/
+    complaints/  profile/  settings/  shared/  team/
 components/
-  CategoryTree, FileCard, FileTable, Preview (pdf/img/audio/video switch),
-  CommentList, CommentForm, StarRating, AclNotice
+  app-sidebar (mobile drawer) · app-header (hamburger) · auth-provider
+  calendar-app · category-tree · file-card · file-dropzone · preview
+  comment-form · comment-list · star-rating
 lib/
-  api.ts                         # fetch wrapper (credentials: 'include')
+  api.ts                         # fetch wrapper + typed API surface
   file-types.ts                  # preview kind mapping
+  meetings.ts                    # isoDay, meetingHref, formatters
+  utils.ts                       # cn(), formatFileSize
 ```
 
 Key behaviours:
-- Session-cookie auth against Django (`CSRF` token handling in `api.ts`).
+- JWT auth (`access_token` in `localStorage`) with automatic refresh on 401;
+  base URL resolved by `getApiBaseUrl()` so LAN clients hit the right host/port.
 - `Preview` component switches on `preview_kind` from API.
-- Admin statistics page guarded client-side by role + server-side by API ACL.
-- Tailwind styling; loading skeletons; 403 page variant for ACL denials.
+- Mobile-first: sidebar is an off-canvas drawer below `md`; calendar collapses
+  to a compact grid + day agenda; complaint cards stack to one column.
+- Deep links (`#meeting-<id>`) are re-applied after async data loads, since the
+  browser's native anchor scroll fires before the element exists.
+- Tailwind styling; loading skeletons; 403/empty states for every list.
 
 ---
 
@@ -431,8 +485,10 @@ The project uses **two repositories**:
 - `main` = production-ready; `staging` = pre-production integration.
 - The parent repo pins an **exact frontend commit** through the submodule, so
   each parent branch defines its precise backend + UI deployment.
-- Current state: both parent branches pin frontend `50703f6`; the frontend
-  `main` and `staging` branches are also at `50703f6`.
+- Read the live pin with `git submodule status` — do not trust a hash written
+  in this document; it goes stale on every frontend commit.
+- Pushing a frontend commit does **not** move the parent pointer: you must
+  `git add frontend && git commit` in the parent as a separate step.
 - Deploy staging:
   `git clone --recurse-submodules -b staging https://github.com/Msaination/councilportalv2.git`
 - Frontend change flow: commit/push on frontend `staging`, then `git add frontend`
@@ -644,13 +700,150 @@ SSO's role is limited to making the *person* claiming that ward trustworthy.
 - Remaining: set councillors' wards via `/dashboard/access`, then (later)
   optional write-back per §6.3 Phase 4.
 
+**Reply thread (2026-11-24):** each complaint can expand into its chat history
+from Supabase's `report_replies` table.
+
+- `client.py::fetch_replies_for_complaint()` — `complaint_id=eq.<id>`,
+  ordered `created_at.asc`.
+- Exposed as `GET /api/complaints/<id>/replies/` via a `@action` on a
+  `ComplaintViewSet` registered with a `DefaultRouter`. A plain `path()` will
+  **not** serve this route.
+- Replies carry `created_at`, `body`, `from_staff`; the UI renders staff
+  messages right-aligned with primary branding and others left-aligned.
+- ⚠ `author_name` currently resolves to `Staff` / `User` — the CMS does not
+  expose a per-reply author name in the current `select`. Real names require
+  resolving the reply's user relation (see open item below).
+- Open: confirm the correct PostgREST syntax for nesting the user relation;
+  `user(full_name)` was rejected with a 400, so the current query ships without
+  it.
+
 **Never:** browser → Supabase direct (breaks §6.1/§6.4 — credentials and
 filtering would be client-side).
 
 ---
 
-## 7. Immediate Next Steps
+## 7. Meeting Archive — planned feature
 
-1. **Production Docker** — fix the frontend image build (pnpm build-script approval) and run `docker compose up -d --build`.
-2. **CI/CD** — GitHub Actions running `python manage.py test` and the Next.js build.
-3. **S3 storage** — swap local media for `django-storages` + `boto3` when needed.
+**Goal:** every meeting keeps its documents forever, reachable from the meeting
+itself. Not implemented yet; this section is the agreed design.
+
+### 7.1 Concept
+
+An archive folder **is a `Category`** — no new content model. One extra FK on
+`Meeting` ties the two together, and everything downstream (upload, preview,
+download logging, `total_file_count`, ACL, share links) already works.
+
+```
+Archive/
+  2026/
+    2026-11-26-first-council/      ← Category, slug mtg-6-first-council
+      Agenda.pdf  Minutes.pdf  Annexure A.pdf
+    2026-11-30-mpac/
+  2027/
+```
+
+### 7.2 Data model
+
+```python
+# documents/models.py — Category
+is_archive  = models.BooleanField(default=False)   # marks the subtree as sealed
+archived_at = models.DateTimeField(null=True, blank=True)
+
+# calendar_app/models.py — Meeting
+archive_category = models.ForeignKey(
+    'documents.Category', null=True, blank=True,
+    on_delete=models.SET_NULL,          # deleting a meeting keeps the archive
+    related_name='archived_meetings',
+)
+```
+
+**Do not reuse `Meeting.category`.** That field already means "related
+collection" and is rendered by `meetingHref()` as the "Open X" link. Overloading
+it would make one link mean two different things over time.
+
+Slug rule: `mtg-<meeting_id>-<title-slug>`. `Category.slug` is globally unique,
+so embedding the id prevents collisions between same-titled meetings.
+
+### 7.3 Lifecycle
+
+| Trigger | Trade-off |
+|---|---|
+| **On meeting creation** — folder exists immediately | staff can add the agenda *before* the meeting; no scheduler needed |
+| Lazy on first view | zero infrastructure, but implicit and unpredictable |
+| Scheduled daily scan | deterministic and auditable, but needs cron/pm2 scheduling |
+
+**Recommended:** create eagerly at meeting creation, then *seal* once the
+meeting ends. "Past" must use `COALESCE(ends_at, starts_at) < now()` because
+`ends_at` is nullable — `starts_at < now()` would seal meetings in progress.
+
+### 7.4 Permanence guards
+
+1. **Block category deletion** — refuse `destroy` when `category.is_archive`
+   (plus a `pre_delete` signal as a second layer).
+2. **Block file mutation** in sealed folders — `destroy`, `replace`,
+   `bulk_delete` must all refuse.
+3. **Copy the meeting's ACL at creation** — mirror `Meeting.team` →
+   `Category.team` and `Meeting.groups` → `Category.access_groups`. Without
+   this, confidential annexures leak to anyone who can browse Archives.
+   *Ship this in the same commit as folder creation, never later.*
+4. **Default `is_shareable = False`** for archived confidential material.
+5. **Audit** — `UploadLog`/`DownloadLog` exist; a deletion log is still needed.
+6. **Durability** — the media volume survives restarts, not host loss. True
+   immutability needs S3 + versioning/object-lock (a separate phase).
+
+### 7.5 Surfacing in the UI
+
+- Serializer adds `archive_slug` and `archived_at`.
+- Day-detail page shows a distinct action — `Archive · 4 files →` with an
+  archive icon — separate from the existing `Open <document>` link.
+- Future meetings may show the same folder labelled `Meeting folder`
+  (pre-meeting docs), or hide it until sealed.
+- Requires a **separate `archiveHref()` helper** in `lib/meetings.ts`; reusing
+  `meetingHref()` would render two links pointing at different folders.
+
+### 7.6 Browse entry point
+
+Sidebar **Archive** item → `/dashboard/collections/meeting-archive`, or a
+dedicated Archived-meetings page grouped by year.
+
+Keep the archive root **out of the normal Resources listing** (`is_archive`
+filter in `CategoryViewSet.list`) so it doesn't clutter LIBRARY/COUNCIL/MPAC —
+but keep it **published**, because unpublished categories fail `can_view` and
+direct links would 404.
+
+### 7.7 Backfill
+
+`manage.py backfill_meeting_archives [--dry-run]` — walk meetings where
+`COALESCE(ends_at, starts_at) < now()` and `archive_category IS NULL`, create
+the year bucket + folder with copied ACL, optionally move the meeting's existing
+`file`. Idempotent, so it doubles as the cron entry point if the scheduled
+trigger is chosen later.
+
+### 7.8 Phasing
+
+| Phase | Scope |
+|---|---|
+| **v1** | `archive_category` + `is_archive`, folder on meeting creation, archive link on past meetings, deletion guards, ACL copy |
+| **v2** | Year-bucket auto-creation, backfill command, Archive browsing page |
+| **v3** | Sealed read-only enforcement, deletion audit log |
+| **v4** | S3 + versioning/object-lock for genuine immutability |
+
+### 7.9 Open decisions
+
+1. Pre-meeting docs? (yes → eager creation; no → scheduled seal)
+2. One archive per meeting, or one per date?
+3. Who may write into an unsealed folder — staff only, or attendees too?
+4. Sealing by time (`ends_at` passed) or explicit staff action? Time-based can
+   seal a postponed meeting.
+5. Do archived files *move* or *copy* into the folder? Moving breaks existing
+   links to the original asset page.
+
+---
+
+## 8. Immediate Next Steps
+
+1. **Meeting Archive v1** — implement §7 (fields, folder creation, ACL copy, link, guards).
+2. **Production Docker** — fix the frontend image build (pnpm build-script approval) and run `docker compose up -d --build`.
+3. **CI/CD** — GitHub Actions running `python manage.py test` and the Next.js build.
+4. **S3 storage** — swap local media for `django-storages` + `boto3` when needed (also unblocks §7.4.6).
+5. **Complaints write-back** — optional, per §6.3 Phase 4.

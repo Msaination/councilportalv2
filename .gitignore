@@ -72,3 +72,10 @@ CMS/
 
 # Docker
 *.pid
+
+# PM2 / process manager — environment-specific, never committed.
+# Each deployment (dev / staging / production) supplies its own config.
+ecosystem.config.js
+ecosystem.config.*.js
+.pm2/
+python/start_django.sh
