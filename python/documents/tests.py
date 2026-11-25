@@ -147,6 +147,28 @@ class CategoryApiTests(PortalTestCase):
         response = self.client.get('/api/categories/')
         self.assertEqual(response.status_code, 401)
 
+    def test_staff_without_superuser_cannot_create_category(self):
+        self.bob.is_staff = True
+        self.bob.save(update_fields=['is_staff'])
+        self.client.force_authenticate(self.bob)
+
+        response = self.client.post('/api/categories/', {
+            'title': 'Staff Attempt',
+            'slug': 'staff-attempt',
+        }, format='json')
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_superadmin_can_create_category(self):
+        self.client.force_authenticate(self.admin)
+
+        response = self.client.post('/api/categories/', {
+            'title': 'New Shelf',
+            'slug': 'new-shelf',
+        }, format='json')
+
+        self.assertEqual(response.status_code, 201)
+
 
 class StoredFileAdminFormTests(TestCase):
     """Admin must explain missing payloads instead of raising the DB constraint."""
@@ -237,6 +259,12 @@ class UploadApiTests(PortalTestCase):
         }, format='multipart')
 
     def test_non_staff_cannot_upload(self):
+        self.client.force_authenticate(self.alice)
+        self.assertEqual(self._upload().status_code, 403)
+
+    def test_staff_without_superuser_cannot_upload(self):
+        self.alice.is_staff = True
+        self.alice.save(update_fields=['is_staff'])
         self.client.force_authenticate(self.alice)
         self.assertEqual(self._upload().status_code, 403)
 

@@ -11,7 +11,7 @@ from rest_framework.response import Response
 
 from .models import Membership, Team, UserProfile
 from .permissions import (
-    CanEditEmployeeNumbers, CanViewTeams, PasswordChangeRequired,
+    CanEditEmployeeNumbers, CanViewTeams, IsSuperUser, PasswordChangeRequired,
 )
 from .serializers import (
     CAPABILITY_PERMISSIONS, ChangePasswordSerializer, MembershipSerializer,
@@ -33,6 +33,15 @@ class TeamViewSet(viewsets.ModelViewSet):
         permissions.IsAuthenticated, PasswordChangeRequired,
     ]
     lookup_field = 'slug'
+
+    def get_permissions(self):
+        """Reads: any authenticated user. Creating a committee: admin only."""
+        if self.action == 'create':
+            return [
+                permissions.IsAuthenticated(), IsSuperUser(),
+                PasswordChangeRequired(),
+            ]
+        return super().get_permissions()
 
     def get_queryset(self):
         qs = Team.objects.prefetch_related('memberships__user')

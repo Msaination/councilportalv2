@@ -52,14 +52,6 @@ DEFAULT_SHARE_EXPIRY_HOURS = 24 * 7
 
 # ─── Permissions ────────────────────────────────────────────
 
-class IsAdminOrReadOnly(permissions.BasePermission):
-    """Read: any authenticated user. Write: superuser or staff only."""
-
-    def has_permission(self, request, view):
-        if request.method in permissions.SAFE_METHODS:
-            return request.user.is_authenticated
-        return request.user and request.user.is_staff
-
 
 def _visible_categories(user):
     """All published categories the user is allowed to see."""
@@ -80,7 +72,7 @@ class CategoryViewSet(viewsets.ReadOnlyModelViewSet):
     lookup_field = 'slug'
 
     def get_permissions(self):
-        """Reads: any authenticated user. Create/remove: admin or staff."""
+        """Reads: any authenticated user. Create/remove: admin only."""
         if self.request.method in permissions.SAFE_METHODS:
             return super().get_permissions()
         return [
@@ -204,7 +196,7 @@ class StoredFileViewSet(viewsets.ReadOnlyModelViewSet):
     WRITE_ACTIONS = ('upload', 'replace', 'destroy', 'bulk_delete')
 
     def get_permissions(self):
-        """Reads: any authenticated user. Upload/replace/remove: admin or staff."""
+        """Reads: any authenticated user. Upload/replace/remove: admin only."""
         if getattr(self, 'action', None) in self.WRITE_ACTIONS:
             return [
                 permissions.IsAuthenticated(), CanManageContent(),

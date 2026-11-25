@@ -15,8 +15,11 @@ Design notes
 ------------
 * Idempotent: a councillor already present (matched on the normalised
   "surname first_names") is skipped unless --update-existing is passed.
-* Usernames are derived deterministically from the name and de-duplicated
-  with a numeric suffix, so re-running never produces a second account.
+* Usernames are surname + initials, lower case, e.g.
+  BRITS ANTHONIE JOHANNES JACOB -> britsajb. Collisions get a numeric
+  suffix, so re-running never produces a second account.
+  --rename-usernames reshapes accounts imported under the older
+  surname[-initial] scheme.
 * No emails or employee numbers exist in the gazette. Both are left blank;
   they can be filled later via /dashboard/access.
 * `party` is stored as a plain column, never as a Django group: groups are
@@ -26,6 +29,7 @@ Design notes
 from __future__ import annotations
 
 import csv
+import re
 from dataclasses import dataclass
 
 from django.conf import settings
@@ -75,6 +79,22 @@ def to_int(value: str | None):
         return None
 
 
+def username_for(row: 'Row') -> str:
+    """Surname + initials, e.g. BRITS / ANTHONIE JOHANNES JACOB -> britsajb."""
+    surname = slugify(row.surname).replace('-', '') or 'councillor'
+    initials = ''.join(
+        word[0].lower() for word in re.findall(r'[A-Za-z]+', row.first_names)
+    )
+    return f'{surname}{initials}'
+
+
+def seat_label(row: 'Row') -> str:
+    """Human label for the seat, e.g. 'ward 22' or 'pr seat 4'."""
+    if row.representation == 'ward':
+        return f'ward {row.ward_number}'
+    return f'pr seat {row.pr_seat}'
+
+
 class Command(BaseCommand):
     help = 'Import councillors from the MP312 gazette CSV.'
 
@@ -89,6 +109,10 @@ class Command(BaseCommand):
             help='Refresh party/ward/representation for users already imported.',
         )
         parser.add_argument(
+            '--rename-usernames', action='store_true',
+            help='Rename imported users to surname+initials (e.g. britsajb).',
+        )
+        parser.add_argument(
             '--group',
             help='Django group to add every imported councillor to '
                  '(e.g. Councillors). Must already exist.',
@@ -98,6 +122,7 @@ class Command(BaseCommand):
         path = options['csv_path']
         dry_run = options['dry_run']
         update_existing = options['update_existing']
+        rename_usernames = options['rename_usernames']
         group_name = options['group']
 
         group = None
@@ -120,12 +145,15 @@ class Command(BaseCommand):
             settings, 'DEFAULT_NEW_USER_PASSWORD', FALLBACK_PASSWORD,
         )
 
-        created = updated = skipped = 0
+        created = updated = skipped = renamed = 0
         seen_usernames: set[str] = set()
 
         with transaction.atomic():
             for row in rows:
                 existing = self._find_existing(row)
+
+                if existing and rename_usernames:
+                    renamed += self._rename(existing, row, seen_usernames)
 
                 if existing and not update_existing:
                     skipped += 1
@@ -147,9 +175,7 @@ class Command(BaseCommand):
                     created += 1
                     self.stdout.write(
                         f'  create {row.full_name}  →  {username} '
-                        f'[{row.representation}'
-                        f'{f" {row.ward_number}" if row.ward_number else ""}'
-                        f'{f" seat {row.pr_seat}" if row.pr_seat else ""}]')
+                        f'[{seat_label(row)}]')
                     continue
 
                 user = User.objects.create_user(
@@ -159,8 +185,6 @@ class Command(BaseCommand):
                     first_name=row.first_names.title(),
                     last_name=row.surname.title(),
                 )
-                profile, _ = UserProfile.objects.get_or_create(user=user)
-                profile.must_change_password = True
                 if group:
                     user.groups.add(group)
                 self._apply_profile(user, row)
@@ -173,8 +197,8 @@ class Command(BaseCommand):
 
         verb = 'would create' if dry_run else 'created'
         self.stdout.write(self.style.SUCCESS(
-            f'\n{verb} {created}, updated {updated}, skipped {skipped} '
-            f'(of {len(rows)} rows).'
+            f'\n{verb} {created}, updated {updated}, skipped {skipped}, '
+            f'renamed {renamed} (of {len(rows)} rows).'
         ))
         if dry_run:
             self.stdout.write('Dry run — nothing was written.')
@@ -255,18 +279,35 @@ class Command(BaseCommand):
             'pr_seat', 'ward_code', 'must_change_password',
         ])
 
+    def _rename(self, user, row: Row, seen: set[str]) -> int:
+        """Give an already-imported user the surname+initials username."""
+        target = self._unique_username(row, seen, exclude_pk=user.pk)
+        seen.add(target)
+        if target == user.username:
+            return 0
+        previous = user.username
+        user.username = target
+        user.save(update_fields=['username'])
+        self.stdout.write(
+            f'  rename {previous} → {target}  ({row.full_name})')
+        return 1
+
     @staticmethod
-    def _unique_username(row: Row, seen: set[str]) -> str:
-        """surname + first initial, e.g. 'sithole' -> 'sithole', 'sithole-s'."""
-        base = slugify(row.surname) or 'councillor'
+    def _unique_username(row: Row, seen: set[str],
+                         exclude_pk: int | None = None) -> str:
+        """Surname + initials, e.g. 'britsajb'; numeric suffix on collision."""
+        base = username_for(row)
         candidate = base
-        if candidate in seen or User.objects.filter(
-                username__iexact=candidate).exists():
-            initial = slugify(row.first_names[:1]) or 'x'
-            candidate = f'{base}-{initial}'
-            suffix = 1
-            while (candidate in seen
-                   or User.objects.filter(username__iexact=candidate).exists()):
-                suffix += 1
-                candidate = f'{base}-{initial}{suffix}'
+        suffix = 1
+        while candidate in seen or Command._clashes(candidate, exclude_pk):
+            suffix += 1
+            candidate = f'{base}{suffix}'
         return candidate
+
+    @staticmethod
+    def _clashes(username: str, exclude_pk: int | None) -> bool:
+        """Is the username already taken by a different account?"""
+        query = User.objects.filter(username__iexact=username)
+        if exclude_pk is not None:
+            query = query.exclude(pk=exclude_pk)
+        return query.exists()

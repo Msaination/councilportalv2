@@ -230,6 +230,7 @@ class UserCreateSerializer(serializers.Serializer):
 
 class ProfileSerializer(serializers.ModelSerializer):
     """A user's own profile: identity fields plus bio, cell, and avatar."""
+
     cell_number = serializers.CharField(
         source='profile.cell_number', required=False, allow_blank=True,
         validators=[CELL_NUMBER_VALIDATOR],
@@ -254,6 +255,18 @@ class ProfileSerializer(serializers.ModelSerializer):
         extra_kwargs = {
             'username': {'min_length': 3, 'max_length': 150},
         }
+
+    def to_representation(self, instance):
+        """Return '' rather than null for a blank cell number.
+
+        The column is stored as NULL so blanks don't collide with the unique
+        constraint, but `null` in JSON reaches the client as
+        `value={null}` on a controlled input, which React rejects.
+        """
+        data = super().to_representation(instance)
+        if data.get('cell_number') is None:
+            data['cell_number'] = ''
+        return data
 
     def validate_username(self, value):
         if User.objects.filter(username__iexact=value).exclude(

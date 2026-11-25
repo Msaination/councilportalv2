@@ -72,7 +72,7 @@ class TeamApiTestCase(APITestCase):
             grant(user, 'view_teams')
 
     def create_team(self, name='Alpha', user=None):
-        self.client.force_authenticate(user or self.owner)
+        self.client.force_authenticate(user or self.admin)
         return self.client.post('/api/teams/', {'name': name}, format='json')
 
 
@@ -85,9 +85,9 @@ class TeamCrudTests(TeamApiTestCase):
         self.assertEqual(response.data['member_count'], 1)
 
         team = Team.objects.get(slug='alpha')
-        membership = Membership.objects.get(team=team, user=self.owner)
+        membership = Membership.objects.get(team=team, user=self.admin)
         self.assertEqual(membership.role, Membership.Role.OWNER)
-        self.assertEqual(self.owner.profile.active_team, team)
+        self.assertEqual(self.admin.profile.active_team, team)
 
     def test_duplicate_names_get_unique_slugs(self):
         self.create_team('Alpha')
@@ -143,8 +143,12 @@ class TeamCrudTests(TeamApiTestCase):
 
     def test_owner_can_delete_team_member_cannot(self):
         self.create_team()
+        team = Team.objects.get(slug='alpha')
         Membership.objects.create(
-            team=Team.objects.get(slug='alpha'), user=self.member,
+            team=team, user=self.member, role=Membership.Role.MEMBER,
+        )
+        Membership.objects.create(
+            team=team, user=self.owner, role=Membership.Role.OWNER,
         )
         self.client.force_authenticate(self.member)
         self.assertEqual(
@@ -157,16 +161,29 @@ class TeamCrudTests(TeamApiTestCase):
 
 
 class CapabilityTests(TeamApiTestCase):
-    def test_team_list_and_create_do_not_require_view_capability(self):
+    def test_team_list_does_not_require_view_capability(self):
         self.client.force_authenticate(self.unprivileged)
         response = self.client.get('/api/teams/')
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data['results'], [])
+
+    def test_only_admin_can_create_a_committee(self):
+        for user in (self.unprivileged, self.owner, self.member,
+                     self.outsider):
+            self.client.force_authenticate(user)
+            response = self.client.post(
+                '/api/teams/', {'name': 'X'}, format='json')
+            self.assertEqual(response.status_code, 403, user.username)
+
+        self.assertFalse(Team.objects.exists())
+
+    def test_admin_can_create_a_committee(self):
+        self.client.force_authenticate(self.admin)
         response = self.client.post(
             '/api/teams/', {'name': 'X'}, format='json')
         self.assertEqual(response.status_code, 201)
         self.assertTrue(Membership.objects.filter(
-            team__slug='x', user=self.unprivileged,
+            team__slug='x', user=self.admin,
             role=Membership.Role.OWNER,
         ).exists())
 
@@ -569,7 +586,14 @@ class TeamMemberTests(TeamApiTestCase):
         self.assertEqual(response.status_code, 404)
 
     def test_remove_member_and_self_removal_guard(self):
-        Membership.objects.create(team=self.team, user=self.member)
+        Membership.objects.create(
+            team=self.team, user=self.member, role=Membership.Role.MEMBER,
+        )
+        Membership.objects.create(
+            team=self.team, user=self.owner, role=Membership.Role.OWNER,
+        )
+        self.client.force_authenticate(self.owner)
+
         response = self.client.delete(
             f'/api/teams/alpha/members/{self.member.id}/')
         self.assertEqual(response.status_code, 204)
@@ -626,7 +650,9 @@ class TeamIsolationTests(TeamApiTestCase):
         self.assertNotIn('cat-a', slugs)
 
     def test_upload_assigns_active_team(self):
-        staff_owner = make_user('staffowner', is_staff=True)
+        # Uploading requires a superuser, so the actor must be an admin to
+        # exercise the team-assignment behaviour under test.
+        staff_owner = make_user('staffowner', is_staff=True, is_superuser=True)
         grant(staff_owner, 'view_teams')
         Membership.objects.create(
             team=self.team_a, user=staff_owner,
@@ -707,6 +733,18 @@ class ProfileApiTests(APITestCase):
         self.assertEqual(response.data['username'], 'profileuser')
         self.assertEqual(response.data['email'], 'user@example.com')
         self.assertTrue(UserProfile.objects.filter(user=self.user).exists())
+
+    def test_blank_cell_number_serialises_as_empty_string(self):
+        """NULL storage must not leak to clients as `null` — a controlled
+        input would receive `value={null}` and React would warn."""
+        profile = self.user.profile
+        profile.cell_number = None
+        profile.save()
+
+        response = self.client.get('/api/profile/')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['cell_number'], '')
 
     def test_update_identity_and_profile_fields(self):
         response = self.client.patch('/api/profile/', {

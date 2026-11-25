@@ -1,9 +1,19 @@
 from django.contrib import admin
+from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
+from django.contrib.auth.models import User
 
 from .models import Membership, Team, UserProfile
 
-# User admin stays stock: the post_save signal in accounts.signals mirrors
+# User admin stays stock apart from the column order — surname reads before
+# given name on the roster. The post_save signal in accounts.signals mirrors
 # every user save (including the admin's "set password" view) to Authentik.
+admin.site.unregister(User)
+
+
+@admin.register(User)
+class UserAdmin(BaseUserAdmin):
+    list_display = ('username', 'last_name', 'first_name', 'email',
+                    'is_staff', 'is_active')
 
 
 @admin.register(Team)
