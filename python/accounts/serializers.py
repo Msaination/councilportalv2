@@ -60,6 +60,10 @@ class UserAccessSerializer(serializers.ModelSerializer):
         source='profile.employee_number', required=False, allow_blank=True,
         allow_null=True, validators=[EMPLOYEE_NUMBER_VALIDATOR],
     )
+    cell_number = serializers.CharField(
+        source='profile.cell_number', required=False, allow_blank=True,
+        allow_null=True, validators=[CELL_NUMBER_VALIDATOR],
+    )
     ward = serializers.IntegerField(
         source='profile.ward', required=False, allow_null=True,
         min_value=1, max_value=999,
@@ -77,11 +81,11 @@ class UserAccessSerializer(serializers.ModelSerializer):
         model = User
         fields = (
             'id', 'username', 'first_name', 'last_name',
-            'email', 'employee_number', 'ward',
+            'email', 'employee_number', 'cell_number', 'ward',
             'must_change_password', 'is_superuser', 'capabilities',
             'view_teams', 'share_files', 'edit_employee_numbers'
         )
-        read_only_fields = ('username', 'email', 'is_superuser')
+        read_only_fields = ('username', 'is_superuser')
 
     def get_capabilities(self, obj):
         return {
@@ -100,30 +104,57 @@ class UserAccessSerializer(serializers.ModelSerializer):
                 'This employee number is already in use.')
         return value
 
+    def validate_cell_number(self, value):
+        if not value:
+            return None
+        qs = UserProfile.objects.filter(cell_number=value)
+        if self.instance is not None:
+            qs = qs.exclude(user=self.instance)
+        if qs.exists():
+            raise serializers.ValidationError(
+                'This cell number is already in use.')
+        return value
+
+    def validate_email(self, value):
+        value = (value or '').strip()
+        if not value:
+            return value
+        qs = User.objects.filter(email__iexact=value)
+        if self.instance is not None:
+            qs = qs.exclude(pk=self.instance.pk)
+        if qs.exists():
+            raise serializers.ValidationError(
+                'This email address is already registered.')
+        return value
+
     def update(self, instance, validated_data):
         request = self.context['request']
         profile_data = validated_data.pop('profile', {})
 
-        # Identity assignments (employee number, ward) share one gate: the
-        # access endpoint already requires edit_employee_numbers/superuser.
-        if 'employee_number' in profile_data or 'ward' in profile_data:
+        # Identity assignments share one gate: the access endpoint already
+        # requires edit_employee_numbers/superuser.
+        identity_fields = ('employee_number', 'cell_number', 'ward')
+        if any(f in profile_data for f in identity_fields):
             can_edit = (request.user.is_superuser or
                         request.user.has_perm('accounts.edit_employee_numbers'))
             if not can_edit:
-                denied = ('employee_number' if 'employee_number'
-                          in profile_data else 'ward')
+                denied = next(f for f in identity_fields if f in profile_data)
                 raise serializers.ValidationError({
                     denied: 'You cannot edit employee numbers or wards.',
                 })
             profile = instance.profile
             updated = []
-            if 'employee_number' in profile_data:
-                profile.employee_number = profile_data['employee_number'] or None
-                updated.append('employee_number')
-            if 'ward' in profile_data:
-                profile.ward = profile_data['ward']
-                updated.append('ward')
-            profile.save(update_fields=updated)
+            for field in identity_fields:
+                if field not in profile_data:
+                    continue
+                value = profile_data[field]
+                # Unique fields store absence as NULL, never ''.
+                if field in ('employee_number', 'cell_number'):
+                    value = (value or '').strip() or None
+                setattr(profile, field, value)
+                updated.append(field)
+            if updated:
+                profile.save(update_fields=updated)
             instance.profile = profile
 
         for name, permission in CAPABILITY_PERMISSIONS.items():
@@ -141,11 +172,29 @@ class UserAccessSerializer(serializers.ModelSerializer):
 
 
 class UserCreateSerializer(serializers.Serializer):
-    """Superadmin creates a user with an employee number."""
+    """Superadmin creates a user.
+
+    `email`, `cell_number` and `employee_number` are optional: the gazetted
+    councillor roster carries none of them (PORTAL_PLAN.md §7). Each is unique
+    when supplied — enforced here for a friendly error and in the database
+    (partial unique index / unique column) as the real guarantee.
+    """
     username = serializers.CharField(min_length=3, max_length=150)
-    email = serializers.EmailField()
+    email = serializers.EmailField(required=False, allow_blank=True,
+                                   default='')
     employee_number = serializers.CharField(
-        max_length=7, validators=[EMPLOYEE_NUMBER_VALIDATOR],
+        required=False, allow_blank=True, allow_null=True, max_length=7,
+        validators=[EMPLOYEE_NUMBER_VALIDATOR],
+    )
+    cell_number = serializers.CharField(
+        required=False, allow_blank=True, allow_null=True, max_length=10,
+        validators=[CELL_NUMBER_VALIDATOR],
+    )
+    first_name = serializers.CharField(
+        required=False, allow_blank=True, max_length=150, default='',
+    )
+    last_name = serializers.CharField(
+        required=False, allow_blank=True, max_length=150, default='',
     )
 
     def validate_username(self, value):
@@ -153,10 +202,29 @@ class UserCreateSerializer(serializers.Serializer):
             raise serializers.ValidationError('This username is already taken.')
         return value
 
+    def validate_email(self, value):
+        value = (value or '').strip()
+        if not value:
+            return ''
+        if User.objects.filter(email__iexact=value).exists():
+            raise serializers.ValidationError(
+                'This email address is already registered.')
+        return value
+
     def validate_employee_number(self, value):
+        if not value:
+            return None
         if UserProfile.objects.filter(employee_number=value).exists():
             raise serializers.ValidationError(
                 'This employee number is already in use.')
+        return value
+
+    def validate_cell_number(self, value):
+        if not value:
+            return None
+        if UserProfile.objects.filter(cell_number=value).exists():
+            raise serializers.ValidationError(
+                'This cell number is already in use.')
         return value
 
 
@@ -191,6 +259,26 @@ class ProfileSerializer(serializers.ModelSerializer):
         if User.objects.filter(username__iexact=value).exclude(
                 pk=self.instance.pk).exists():
             raise serializers.ValidationError('This username is already taken.')
+        return value
+
+    def validate_email(self, value):
+        value = (value or '').strip()
+        if not value:
+            return value
+        if User.objects.filter(email__iexact=value).exclude(
+                pk=self.instance.pk).exists():
+            raise serializers.ValidationError(
+                'This email address is already registered.')
+        return value
+
+    def validate_cell_number(self, value):
+        value = (value or '').strip()
+        if not value:
+            return value
+        if UserProfile.objects.filter(cell_number=value).exclude(
+                user=self.instance).exists():
+            raise serializers.ValidationError(
+                'This cell number is already in use.')
         return value
 
     def validate_avatar(self, value):

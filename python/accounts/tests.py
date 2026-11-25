@@ -6,6 +6,7 @@ import tempfile
 from unittest import mock
 
 import requests as requests_lib
+from django.conf import settings
 from django.contrib.auth.models import Permission, User
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import override_settings
@@ -311,14 +312,14 @@ class ForcedPasswordChangeTests(TeamApiTestCase):
         self.assertTrue(response.data['must_change_password'])
 
         new_user = User.objects.get(username='newuser')
-        self.assertTrue(new_user.check_password('Password#v2cp2026'))
+        self.assertTrue(new_user.check_password(settings.DEFAULT_NEW_USER_PASSWORD))
 
         self.client.force_authenticate(new_user)
         self.assertEqual(self.client.get('/api/files/').status_code, 403)
         self.assertEqual(self.client.get('/api/profile/').status_code, 200)
 
         change = self.client.post('/api/profile/password/', {
-            'current_password': 'Password#v2cp2026',
+            'current_password': settings.DEFAULT_NEW_USER_PASSWORD,
             'new_password': 'Zebra#Cloud91',
         }, format='json')
         self.assertEqual(change.status_code, 200)
@@ -687,6 +688,50 @@ class ProfileApiTests(APITestCase):
                     '/api/profile/', {'cell_number': invalid}, format='json',
                 )
                 self.assertEqual(response.status_code, 400)
+
+    def test_cell_number_must_be_unique(self):
+        other = make_user('cellowner')
+        other.profile.cell_number = '0821234567'
+        other.profile.save(update_fields=['cell_number'])
+
+        response = self.client.patch(
+            '/api/profile/', {'cell_number': '0821234567'}, format='json',
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('cell_number', response.data)
+
+    def test_own_cell_number_can_be_resaved(self):
+        """Re-submitting your own number must not trip the uniqueness check."""
+        self.client.patch(
+            '/api/profile/', {'cell_number': '0821234567'}, format='json',
+        )
+        response = self.client.patch(
+            '/api/profile/', {'cell_number': '0821234567'}, format='json',
+        )
+        self.assertEqual(response.status_code, 200)
+
+    def test_email_must_be_unique_case_insensitively(self):
+        other = make_user('mailowner')
+        other.email = 'Owner@Example.com'
+        other.save(update_fields=['email'])
+
+        response = self.client.patch(
+            '/api/profile/', {'email': 'owner@example.com'}, format='json',
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('email', response.data)
+
+    def test_blank_cell_numbers_do_not_collide(self):
+        """Absence is stored as NULL, so many users may omit the number."""
+        for name in ('blank1', 'blank2'):
+            make_user(name)  # no cell_number supplied
+        self.assertEqual(
+            UserProfile.objects.filter(
+                user__username__in=('blank1', 'blank2'),
+                cell_number__isnull=True,
+            ).count(),
+            2,
+        )
 
     def test_username_must_be_unique(self):
         make_user('taken')

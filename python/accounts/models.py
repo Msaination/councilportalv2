@@ -87,6 +87,11 @@ class Membership(models.Model):
 
 class UserProfile(models.Model):
     """Tracks which team a user is currently working in, plus their profile."""
+
+    class Representation(models.TextChoices):
+        WARD = 'ward', 'Ward councillor'
+        PR = 'pr', 'Proportional representation'
+
     user = models.OneToOneField(
         settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
         related_name='profile',
@@ -96,10 +101,12 @@ class UserProfile(models.Model):
         related_name='active_profiles',
     )
     cell_number = models.CharField(
-        max_length=10, blank=True, validators=[CELL_NUMBER_VALIDATOR],
+        max_length=10, null=True, blank=True,
+        validators=[CELL_NUMBER_VALIDATOR],
+        help_text='SA mobile number: 10 digits starting with 0.',
     )
     employee_number = models.CharField(
-        max_length=7, unique=True, null=True, blank=True,
+        max_length=7, null=True, blank=True,
         validators=[EMPLOYEE_NUMBER_VALIDATOR],
     )
     bio = models.TextField(max_length=500, blank=True)
@@ -113,15 +120,72 @@ class UserProfile(models.Model):
         help_text='Municipal ward number this user represents (if any).',
     )
 
+    # ── Councillor identity (source: MP312 government gazette) ────────────
+    # These describe *who the person is*, never what they may access.
+    # Deliberately plain columns — NOT Django groups, which are content
+    # roles consumed by Category.access_groups (PORTAL_PLAN.md §Access Model).
+    political_party = models.CharField(
+        max_length=120, blank=True,
+        help_text='Political party as gazetted, '
+                  'e.g. "AFRICAN NATIONAL CONGRESS".',
+    )
+    representation = models.CharField(
+        max_length=4, choices=Representation.choices, blank=True,
+        help_text='Ward seat or proportional-representation seat.',
+    )
+    pr_seat = models.PositiveSmallIntegerField(
+        null=True, blank=True,
+        help_text='Position on the party PR list (PR councillors only).',
+    )
+    ward_code = models.CharField(
+        max_length=8, blank=True,
+        help_text='IEC ward code from the gazette, e.g. "83102001" '
+                  '(audit / re-import key only).',
+    )
+
     class Meta:
         verbose_name = 'User profile'
         verbose_name_plural = 'User profiles'
         permissions = [
             ('edit_employee_numbers', 'Can edit employee numbers'),
         ]
+        constraints = [
+            # A PR seat number is meaningless for a ward councillor. Existing
+            # rows hold NULL, so this is additive and safe.
+            models.CheckConstraint(
+                condition=(
+                    models.Q(pr_seat__isnull=True)
+                    | models.Q(representation='pr')
+                ),
+                name='pr_seat_requires_pr_representation',
+            ),
+            # Identity columns are unique *when present*. They are nullable so
+            # that any number of users may omit them (gazetted councillors
+            # carry no cell/employee number); SQL treats NULLs as distinct,
+            # whereas two '' values would collide.
+            models.UniqueConstraint(
+                fields=['employee_number'],
+                name='unique_employee_number',
+            ),
+            models.UniqueConstraint(
+                fields=['cell_number'],
+                name='unique_cell_number',
+            ),
+        ]
 
     def __str__(self):
         return f'Profile of {self.user}'
+
+    def save(self, *args, **kwargs):
+        # `unique` columns together with optional values would clash on ''
+        # (two blank cells are equal). Store absence as NULL instead — SQL
+        # treats NULLs as distinct, so any number of users may omit these.
+        for field in ('cell_number', 'employee_number'):
+            value = getattr(self, field)
+            if value is not None:
+                value = value.strip()
+                setattr(self, field, value or None)
+        super().save(*args, **kwargs)
 
 
 def get_active_team(user):

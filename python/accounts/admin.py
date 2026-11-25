@@ -28,9 +28,29 @@ class MembershipAdmin(admin.ModelAdmin):
 @admin.register(UserProfile)
 class UserProfileAdmin(admin.ModelAdmin):
     verbose_name = 'User profile'
-    list_display = ('user', 'employee_number', 'ward', 'cell_number',
+    list_display = ('user', 'employee_number', 'ward', 'representation',
+                    'political_party', 'cell_number',
                     'must_change_password', 'active_team')
-    list_filter = ('must_change_password', 'ward')
-    search_fields = ('user__username', 'user__email', 'cell_number',
-                     'employee_number')
+    list_filter = ('must_change_password', 'representation', 'ward',
+                   'political_party')
+    search_fields = ('user__username', 'user__email', 'user__first_name',
+                     'user__last_name', 'cell_number', 'employee_number',
+                     'political_party', 'ward_code')
     raw_id_fields = ('user', 'active_team')
+    fieldsets = (
+        ('Committee', {
+            'fields': ('user', 'active_team'),
+        }),
+        ('Identity', {
+            'fields': ('employee_number', 'ward', 'cell_number'),
+        }),
+        ('Councillor (gazette)', {
+            'fields': ('representation', 'political_party', 'pr_seat',
+                       'ward_code'),
+            'description': 'Sourced from the MP312 gazette. These describe '
+                           'who the person is, not what they may access.',
+        }),
+        ('Profile', {
+            'fields': ('bio', 'avatar', 'must_change_password'),
+        }),
+    )

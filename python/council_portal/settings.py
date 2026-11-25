@@ -265,6 +265,16 @@ CORS_ALLOWED_ORIGINS = [
 CORS_ALLOW_CREDENTIALS = True
 
 
+# ─── Accounts ───────────────────────────────────────────────
+
+# Password handed to every admin-created user. They are forced to change it on
+# first login (UserProfile.must_change_password), so this is a bootstrap
+# credential, not a long-lived secret. Overridable per environment.
+DEFAULT_NEW_USER_PASSWORD = os.environ.get(
+    'DEFAULT_NEW_USER_PASSWORD', '#ECOP26-31',
+)
+
+
 # ─── Django REST Framework ──────────────────────────────────
 
 REST_FRAMEWORK = {

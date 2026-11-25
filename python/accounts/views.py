@@ -1,5 +1,6 @@
 """Committee workspace API: list, create, members, and switching."""
 
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from rest_framework import mixins, permissions, status, viewsets
 from rest_framework.decorators import (
@@ -19,7 +20,10 @@ from .serializers import (
 
 User = get_user_model()
 
-DEFAULT_NEW_USER_PASSWORD = 'Password#v2cp2026'
+# Read from settings so each environment can override the bootstrap password.
+DEFAULT_NEW_USER_PASSWORD = getattr(
+    settings, 'DEFAULT_NEW_USER_PASSWORD', '#ECOP26-31',
+)
 
 
 class TeamViewSet(viewsets.ModelViewSet):
@@ -152,13 +156,18 @@ class UserAccessViewSet(mixins.ListModelMixin,
 
         user = User.objects.create_user(
             username=data['username'],
-            email=data['email'],
+            email=data.get('email') or '',
             password=DEFAULT_NEW_USER_PASSWORD,
+            first_name=data.get('first_name') or '',
+            last_name=data.get('last_name') or '',
         )
         profile, _ = UserProfile.objects.get_or_create(user=user)
-        profile.employee_number = data['employee_number']
+        profile.employee_number = data.get('employee_number') or None
+        profile.cell_number = data.get('cell_number') or None
         profile.must_change_password = True
-        profile.save(update_fields=['employee_number', 'must_change_password'])
+        profile.save(update_fields=[
+            'employee_number', 'cell_number', 'must_change_password',
+        ])
         user.refresh_from_db()
         # The post_save signal already mirrored this user (with the default
         # password's hash) to Authentik, so Council SSO works immediately.

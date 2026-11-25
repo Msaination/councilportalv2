@@ -299,7 +299,7 @@ curl -X POST http://127.0.0.1:8000/api/files/upload/ \
 ### Profiles, employee numbers & first-login security (shipped)
 - `/dashboard/profile`: username, email, SA cell number (`0XXXXXXXXX`), bio (500 chars), avatar (≤2 MB), password change
 - Unique employee number: `S`-prefixed, max 7 chars; read-only for users, editable only by superadmin/assigned editors
-- New users are created with default password `Password#v2cp2026` and `must_change_password=True`
+- New users are created with default password `#ECOP26-31` (from `settings.DEFAULT_NEW_USER_PASSWORD`, overridable per environment) and `must_change_password=True`. `email` and `employee_number` are now optional at creation so gazetted councillors can be onboarded without HR data.
 - Forced first-login change: login redirects to the profile page; all normal APIs return 403 until the password is changed
 
 ### Calendar application (shipped)
