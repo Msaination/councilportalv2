@@ -160,10 +160,11 @@ class ComplaintsGatewayTests(APITestCase):
 class EscalationRuleTests(APITestCase):
     """The 72-hour rule is pure logic — verify it without any network."""
 
-    def _complaint(self, hours_old, status='Received'):
+    def _complaint(self, hours_old, status='submitted', priority='normal'):
         from datetime import datetime, timedelta, timezone
         created = datetime.now(timezone.utc) - timedelta(hours=hours_old)
-        return {'id': 1, 'status': status, 'created_at': created.isoformat()}
+        return {'id': 1, 'status': status, 'priority': priority,
+                'created_at': created.isoformat()}
 
     def test_young_complaint_cannot_be_escalated(self):
         from .client import can_escalate
@@ -178,18 +179,25 @@ class EscalationRuleTests(APITestCase):
         from .client import can_escalate
         created = datetime(2026, 11, 22, 9, 0, tzinfo=timezone.utc)
         now = created + timedelta(hours=72)
-        complaint = {'status': 'Received', 'created_at': created.isoformat()}
+        complaint = {'status': 'submitted', 'priority': 'normal',
+                     'created_at': created.isoformat()}
         self.assertTrue(can_escalate(complaint, now=now))
 
     def test_finished_complaints_cannot_be_escalated(self):
         from .client import can_escalate
-        for status in ('Escalated', 'Resolved', 'Completed'):
+        for status in ('resolved', 'closed'):
             with self.subTest(status=status):
                 self.assertFalse(can_escalate(self._complaint(100, status)))
 
-    def test_missing_timestamp_is_not_escalatable(self):
+    def test_already_urgent_cannot_be_escalated_again(self):
         from .client import can_escalate
-        self.assertFalse(can_escalate({'status': 'Received', 'created_at': None}))
+        self.assertFalse(
+            can_escalate(self._complaint(100, priority='urgent')))
+
+    def test_in_progress_complaint_can_still_be_escalated(self):
+        from .client import can_escalate
+        self.assertTrue(
+            can_escalate(self._complaint(100, status='inProgress')))
 
     def test_zulu_timestamps_are_parsed(self):
         from .client import escalation_deadline
@@ -221,12 +229,12 @@ class EscalationEndpointTests(APITestCase):
 
     @mock.patch('complaints.views.escalate_complaint')
     def test_successful_escalation_returns_the_complaint(self, escalate):
-        escalate.return_value = ({'id': 1, 'status': 'Escalated'}, None)
+        escalate.return_value = ({'id': 1, 'priority': 'urgent'}, None)
         response = self.client.post(
             '/api/complaints/1/escalate/', {'reason': 'No action'}, format='json',
         )
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.data['status'], 'Escalated')
+        self.assertEqual(response.data['priority'], 'urgent')
         # URL kwargs arrive as strings; Supabase complaint ids are UUIDs.
         escalate.assert_called_once_with('1', 12, 'No action')
 
@@ -263,6 +271,7 @@ class ComplaintCreateEndpointTests(APITestCase):
                 'title': 'Burst pipe',
                 'description': 'Water everywhere',
                 'category': 'Water',
+                'location_address': '12 Kromdraai Road',
                 'ward_number': '99',  # ignored
             }, format='json')
 
@@ -270,8 +279,35 @@ class ComplaintCreateEndpointTests(APITestCase):
         fields = create.call_args.args[0]
         self.assertEqual(fields['ward_number'], '12')
         self.assertEqual(fields['status'], 'submitted')
-        self.assertEqual(fields['received_via'], 'portal')
+        # complaints_received_via_check allows website|app|phone|whatsapp
+        self.assertEqual(fields['received_via'], 'website')
         self.assertEqual(fields['category'], 'Water')
+        self.assertEqual(fields['location_address'], '12 Kromdraai Road')
+
+    def test_reporter_is_recorded_in_a_text_column(self):
+        """`user_id` and `logged_by` are uuids owned by Supabase auth, so the
+        portal cannot write its own user id there (Postgres 22P02). The
+        councillor is recorded in `caller_name` instead."""
+        user = self.user
+        user.first_name = 'Simon Fanie'
+        user.last_name = 'Sithole'
+        user.save()
+
+        with mock.patch('complaints.views.create_complaint') as create:
+            create.return_value = ({'id': 1}, None)
+            self.client.post('/api/complaints/', {
+                'title': 'Burst pipe',
+                'description': 'Water',
+                'category': 'Water',
+                'location_address': '12 Kromdraai Road',
+            }, format='json')
+
+        fields = create.call_args.args[0]
+        self.assertEqual(fields['caller_name'],
+                         'Simon Fanie Sithole (councillor)')
+        # uuid columns must never be populated with a Django integer id
+        self.assertNotIn('user_id', fields)
+        self.assertNotIn('logged_by', fields)
 
     def test_title_and_description_are_required(self):
         response = self.client.post('/api/complaints/', {
@@ -287,15 +323,27 @@ class ComplaintCreateEndpointTests(APITestCase):
         response = self.client.post('/api/complaints/', {
             'title': 'Burst pipe',
             'description': 'Water',
+            'location_address': '12 Kromdraai Road',
         }, format='json')
         self.assertEqual(response.status_code, 400)
         self.assertIn('category', response.data)
+
+    def test_location_address_is_required(self):
+        """Also NOT NULL in Supabase — omitting it is a 400, not a 502."""
+        response = self.client.post('/api/complaints/', {
+            'title': 'Burst pipe',
+            'description': 'Water',
+            'category': 'Water',
+        }, format='json')
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('location_address', response.data)
 
     def test_priority_only_accepts_live_values(self):
         response = self.client.post('/api/complaints/', {
             'title': 'Burst pipe',
             'description': 'Water',
             'category': 'Water',
+            'location_address': '12 Kromdraai Road',
             'priority': 'High',  # the CMS uses normal|urgent
         }, format='json')
         self.assertEqual(response.status_code, 400)
@@ -317,6 +365,7 @@ class ComplaintCreateEndpointTests(APITestCase):
             response = self.client.post('/api/complaints/', {
                 'title': 'Burst pipe', 'description': 'Water',
                 'category': 'Water',
+                'location_address': '12 Kromdraai Road',
             }, format='json')
         self.assertEqual(response.status_code, 503)
 

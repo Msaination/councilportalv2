@@ -27,16 +27,15 @@ class ComplaintCreateSerializer(serializers.Serializer):
     """
     title = serializers.CharField(max_length=200)
     description = serializers.CharField(max_length=2000)
-    # `category` is NOT NULL with no default in Supabase, so it is required.
+    # `category` and `location_address` are both NOT NULL with no default in
+    # Supabase, so both are required here.
     category = serializers.CharField(max_length=100)
+    location_address = serializers.CharField(max_length=255)
     issue_type = serializers.CharField(
         max_length=100, required=False, allow_blank=True, default='',
     )
     assigned_department = serializers.CharField(
         max_length=100, required=False, allow_blank=True, default='',
-    )
-    location_address = serializers.CharField(
-        max_length=255, required=False, allow_blank=True, default='',
     )
     # The CMS only uses these two values.
     priority = serializers.ChoiceField(
@@ -59,6 +58,13 @@ class ComplaintCreateSerializer(serializers.Serializer):
         value = value.strip()
         if not value:
             raise serializers.ValidationError('Choose a category.')
+        return value
+
+    def validate_location_address(self, value):
+        value = value.strip()
+        if not value:
+            raise serializers.ValidationError(
+                'Give the street or stand number.')
         return value
 
 

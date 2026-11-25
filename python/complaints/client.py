@@ -22,17 +22,17 @@ COMPLAINTS_TABLE = 'complaints'
 # A councillor may escalate a complaint only once it has been open this long.
 ESCALATION_WINDOW_HOURS = 72
 
-# Escalation must move the complaint forward; these states are already past
-# the point where escalating means anything. The CMS stores lowercase
-# camel-style values (submitted, inProgress, closed, resolved), so compare
-# case-insensitively rather than trusting one spelling.
-FINAL_STATUSES = frozenset({
-    'escalated', 'resolved', 'closed', 'completed', 'cancelled',
-})
+# Status values the CMS actually accepts (complaints_status_check).
+# There is deliberately no 'escalated' status: escalation is expressed by
+# raising `priority` to 'urgent', which complaints_priority_check allows.
+STATUSES = frozenset({'submitted', 'inProgress', 'closed', 'resolved'})
+PRIORITIES = frozenset({'normal', 'urgent'})
 
+# A complaint in one of these states is finished; escalating is pointless.
+FINAL_STATUSES = frozenset({'resolved', 'closed'})
 
-def _normalise_status(value):
-    return (value or '').strip().lower()
+ESCALATED_PRIORITY = 'urgent'
+
 # Map the live Supabase schema onto the stable field names used by the portal.
 COMPLAINT_FIELDS = (
     'id,reference_number,subject:title,status,priority,ward:ward_number,'
@@ -40,6 +40,10 @@ COMPLAINT_FIELDS = (
     'issue_type,description,received_channel:received_via,'
     'date_reported:created_at,created_at'
 )
+
+
+def _normalise_status(value):
+    return (value or '').strip().lower()
 
 
 def _supabase_config():
@@ -142,7 +146,8 @@ def _fetch_one(complaint_id, ward):
         params={
             'id': f'eq.{complaint_id}',
             'ward_number': f'eq.{ward}',
-            'select': 'id,reference_number,title,status,ward_number,created_at',
+            'select': 'id,reference_number,title,status,priority,'
+                      'ward_number,created_at',
             'limit': '1',
         },
         timeout=10,
@@ -178,6 +183,8 @@ def can_escalate(complaint, *, now=None):
     """Has this complaint been open long enough, and is it still open?"""
     if _normalise_status(complaint.get('status')) in FINAL_STATUSES:
         return False
+    if _normalise_status(complaint.get('priority')) == ESCALATED_PRIORITY:
+        return False
     deadline = escalation_deadline(complaint)
     if deadline is None:
         return False
@@ -210,26 +217,25 @@ def escalate_complaint(complaint_id, ward, reason=''):
         return None, {'detail': 'Complaint not found in your ward.', 'status': 404}
 
     if not can_escalate(complaint):
-        status_text = _normalise_status(complaint.get('status')) or 'unknown'
+        status_text = _normalise_status(complaint.get('status'))
         if status_text in FINAL_STATUSES:
             detail = f'This complaint is already {status_text}.'
+        elif _normalise_status(complaint.get('priority')) == ESCALATED_PRIORITY:
+            detail = 'This complaint has already been escalated.'
         else:
             detail = ('A complaint can only be escalated after '
                       f'{ESCALATION_WINDOW_HOURS} hours.')
         return None, {'detail': detail, 'status': 400}
 
+    # Escalation = urgent priority. The CMS has no 'escalated' status, and
+    # `priority` is the only column that carries "this needs attention now".
     rest_url, headers = config
-    payload = {'status': 'escalated'}
-    note = (reason or '').strip()
-    if note:
-        payload['escalation_reason'] = note[:500]
-
     try:
         response = requests.patch(
             f'{rest_url}/{COMPLAINTS_TABLE}',
             headers={**headers, 'Prefer': 'return=representation'},
             params={'id': f'eq.{complaint_id}', 'ward_number': f'eq.{ward}'},
-            json=payload,
+            json={'priority': ESCALATED_PRIORITY},
             timeout=10,
         )
         response.raise_for_status()
@@ -241,7 +247,8 @@ def escalate_complaint(complaint_id, ward, reason=''):
             'status': 502,
         }
 
-    return (rows[0] if rows else {**complaint, 'status': 'escalated'}), None
+    return (rows[0] if rows else
+            {**complaint, 'priority': ESCALATED_PRIORITY}), None
 
 
 def create_complaint(fields):

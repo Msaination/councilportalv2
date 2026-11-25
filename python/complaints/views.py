@@ -35,6 +35,19 @@ def _profile_for(request):
     return UserProfile.objects.get(user=request.user)
 
 
+def reporter_name(user):
+    """Who the CMS should show as having logged this complaint.
+
+    Includes the username in brackets so a complaint can be traced back to a
+    portal account — the Supabase identity columns are uuids the portal does
+    not own, so this text column is the only place the link can live.
+    """
+    full = f'{user.first_name} {user.last_name}'.strip()
+    if full and user.username:
+        return f'{full} ({user.username})'
+    return full or user.username
+
+
 class ComplaintViewSet(viewsets.ViewSet):
     permission_classes = [permissions.IsAuthenticated, PasswordChangeRequired]
 
@@ -91,19 +104,27 @@ class ComplaintViewSet(viewsets.ViewSet):
 
         # Column names and value spellings mirror the live Supabase schema:
         # status defaults to 'submitted', priority is normal|urgent, and
-        # received_via holds lowercase channel names like 'website'.
+        # received_via is constrained to website|app|phone|whatsapp by
+        # complaints_received_via_check. The portal runs in a browser, so
+        # 'website' is the honest value.
+        #
+        # Attribution: `user_id` and `logged_by` are both uuid columns, and
+        # `user_id` is a FK to Supabase's own `profiles.id`. A portal user has
+        # no Supabase auth uuid, so writing Django's integer id there is
+        # rejected with 22P02. `caller_name` is the text column the CMS
+        # already uses for "who reported this", so the councillor goes there.
         fields = {
             'title': data['title'],
             'description': data['description'],
             'category': data['category'],
             'ward_number': str(profile.ward),
-            'user_id': request.user.id,
+            'location_address': data['location_address'],
+            'caller_name': reporter_name(request.user),
             'priority': data['priority'],
             'status': 'submitted',
-            'received_via': 'portal',
+            'received_via': 'website',
         }
-        for optional in ('issue_type', 'assigned_department',
-                         'location_address'):
+        for optional in ('issue_type', 'assigned_department'):
             if data.get(optional):
                 fields[optional] = data[optional]
 
