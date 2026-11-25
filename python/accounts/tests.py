@@ -160,6 +160,84 @@ class TeamCrudTests(TeamApiTestCase):
         self.assertFalse(Team.objects.exists())
 
 
+class TeamCanManageFlagTests(TeamApiTestCase):
+    """The client must not re-derive permission from `role`: a platform
+    admin has no membership row, so `role` is null for them."""
+
+    def setUp(self):
+        super().setUp()
+        self.team = Team.objects.create(name='Alpha', created_by=self.owner)
+        Membership.objects.create(
+            team=self.team, user=self.owner, role=Membership.Role.OWNER,
+        )
+        Membership.objects.create(
+            team=self.team, user=self.member, role=Membership.Role.MEMBER,
+        )
+
+    def _row(self, user):
+        self.client.force_authenticate(user)
+        response = self.client.get('/api/teams/')
+        rows = results(response)
+        self.assertEqual(len(rows), 1)
+        return rows[0]
+
+    def test_owner_can_manage(self):
+        row = self._row(self.owner)
+        self.assertEqual(row['role'], 'owner')
+        self.assertTrue(row['can_manage'])
+
+    def test_plain_member_cannot_manage(self):
+        row = self._row(self.member)
+        self.assertEqual(row['role'], 'member')
+        self.assertFalse(row['can_manage'])
+
+    def test_admin_can_manage_without_a_membership(self):
+        row = self._row(self.admin)
+        self.assertIsNone(row['role'])
+        self.assertTrue(row['can_manage'])
+
+
+class TeamAdminInlineTests(TeamApiTestCase):
+    """A committee added through the Django admin must also get an owner.
+
+    TeamViewSet.perform_create does this for the API; the admin did not, so
+    committees created there had no members and were invisible to every
+    non-staff user.
+    """
+
+    def test_admin_creation_adds_owner_membership(self):
+        from django.contrib.admin.sites import site
+
+        team_admin = site._registry[Team]
+        team = Team(name='Admin Made', created_by=self.owner)
+        team.save()
+
+        # save_model needs a request and form; only the request is used.
+        from django.test import RequestFactory
+        request = RequestFactory().post('/admin/accounts/team/add/')
+        request.user = self.admin
+        team_admin.save_model(request, team, form=None, change=False)
+
+        membership = team.memberships.get(user=self.owner)
+        self.assertEqual(membership.role, Membership.Role.OWNER)
+
+    def test_admin_creation_does_not_duplicate_membership(self):
+        from django.contrib.admin.sites import site
+        from django.test import RequestFactory
+
+        team_admin = site._registry[Team]
+        team = Team.objects.create(name='Seeded', created_by=self.owner)
+        Membership.objects.create(
+            team=team, user=self.owner, role=Membership.Role.OWNER,
+        )
+
+        request = RequestFactory().post('/admin/accounts/team/add/')
+        request.user = self.admin
+        team_admin.save_model(request, team, form=None, change=False)
+
+        self.assertEqual(team.memberships.count(), 1)
+
+
 class CapabilityTests(TeamApiTestCase):
     def test_team_list_does_not_require_view_capability(self):
         self.client.force_authenticate(self.unprivileged)

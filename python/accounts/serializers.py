@@ -31,13 +31,14 @@ class MembershipSerializer(serializers.ModelSerializer):
 class TeamSerializer(serializers.ModelSerializer):
     """Committee representation exposed to the frontend."""
     role = serializers.SerializerMethodField()
+    can_manage = serializers.SerializerMethodField()
     member_count = serializers.SerializerMethodField()
     members = MembershipSerializer(source='memberships', many=True,
                                    read_only=True)
 
     class Meta:
         model = Team
-        fields = ('id', 'name', 'slug', 'created_at', 'role',
+        fields = ('id', 'name', 'slug', 'created_at', 'role', 'can_manage',
                   'member_count', 'members')
         read_only_fields = ('slug', 'created_at')
 
@@ -48,6 +49,17 @@ class TeamSerializer(serializers.ModelSerializer):
             return None
         membership = obj.memberships.filter(user=user).first()
         return membership.role if membership else None
+
+    def get_can_manage(self, obj):
+        """Mirror TeamViewSet._can_manage so the client never re-derives it."""
+        request = self.context.get('request')
+        user = getattr(request, 'user', None)
+        if not user or not user.is_authenticated:
+            return False
+        if user.is_staff:
+            return True
+        membership = obj.memberships.filter(user=user).first()
+        return bool(membership and membership.can_manage)
 
     def get_member_count(self, obj):
         return obj.memberships.count()
