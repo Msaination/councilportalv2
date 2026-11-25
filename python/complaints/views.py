@@ -97,6 +97,7 @@ class ComplaintViewSet(viewsets.ViewSet):
             'description': data['description'],
             'category': data['category'],
             'ward_number': str(profile.ward),
+            'user_id': request.user.id,
             'priority': data['priority'],
             'status': 'submitted',
             'received_via': 'portal',
