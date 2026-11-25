@@ -647,6 +647,48 @@ class TeamIsolationTests(TeamApiTestCase):
 
 
 @override_settings(MEDIA_ROOT=TEST_MEDIA_ROOT, AUTHENTIK_API_URL='')
+class AuthConfigTests(APITestCase):
+    """The login page asks the backend whether Council SSO is available.
+
+    Gating the SSO button server-side lets each environment switch it on by
+    setting OIDC env vars, with no frontend rebuild.
+    """
+
+    CONFIG_URL = '/api/auth/config/'
+
+    @override_settings(OIDC_ISSUER='', OIDC_CLIENT_ID='')
+    def test_reports_disabled_when_oidc_not_configured(self):
+        response = self.client.get(self.CONFIG_URL)
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.data['sso_enabled'])
+        self.assertIsNone(response.data['sso_login_url'])
+
+    @override_settings(
+        OIDC_ISSUER='http://idp.test/application/o/portal/',
+        OIDC_CLIENT_ID='portal-client',
+    )
+    def test_reports_enabled_with_login_url_when_configured(self):
+        response = self.client.get(self.CONFIG_URL)
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.data['sso_enabled'])
+        self.assertIn('/api/auth/oidc/authenticate/', response.data['sso_login_url'])
+
+    @override_settings(
+        OIDC_ISSUER='http://idp.test/application/o/portal/',
+        OIDC_CLIENT_ID='',
+    )
+    def test_half_configured_counts_as_disabled(self):
+        """An issuer without a client id would produce a broken redirect."""
+        response = self.client.get(self.CONFIG_URL)
+        self.assertFalse(response.data['sso_enabled'])
+
+    @override_settings(OIDC_ISSUER='', OIDC_CLIENT_ID='')
+    def test_reachable_without_authentication(self):
+        """The login page has no token yet, so this must be public."""
+        response = self.client.get(self.CONFIG_URL)
+        self.assertEqual(response.status_code, 200)
+
+
 class ProfileApiTests(APITestCase):
     @classmethod
     def tearDownClass(cls):

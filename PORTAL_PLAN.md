@@ -4,7 +4,7 @@ A cloud-native Digital Asset Management solution: **Create once, reimagine every
 
 **Stack**: React Next.js (Server Actions + Turbopack) · Django REST Framework (JWT) · PostgreSQL · Shadcn UI · Tailwind CSS · Docker
 
-**Last updated:** 24 November 2026
+**Last updated:** 25 November 2026
 
 ---
 
@@ -190,7 +190,7 @@ All 8 phases + dashboard UI complete. Full stack running and verified.
 | User profiles | Self-service username, email, SA cell number, bio, avatar upload, password change | ✅ Complete |
 | Employee numbers | Unique `S`-prefixed (7 chars), editable only by superadmin/assigned editors; new users get default password + forced first-login change | ✅ Complete |
 | Calendar | Meetings month view + sticky upcoming sidebar; `/dashboard/calendar` and standalone `/calendar`; My/All filter; clickable dates → day view; meeting times link to related collection/document/meeting; staff CRUD | ✅ Complete |
-| Tests | 87 backend tests (ACL, uploads, sharing, teams, capabilities, profiles, calendar) | ✅ Complete |
+| Tests | 87 backend tests at MVP; accounts suite alone is now 57 (uniqueness, auth config, forced password change) | ✅ Complete |
 | Dashboard UI | Sidebar, header, asset/collection pages | ✅ Complete |
 | Resource rename | "Collection"/"Documents" → **Resource**; "Asset" → **File**; subcategories → **Subfolders**; consistent across UI + admin | ✅ Complete |
 | Recursive file counts | `Category.total_file_count` — parent folders now report files held in their subfolders instead of `0` | ✅ Complete |
@@ -198,6 +198,12 @@ All 8 phases + dashboard UI complete. Full stack running and verified.
 | Calendar redesign | Highlighted meeting days (tint + bold number + count badge + legend), compact mobile grid, per-day agenda panel, day-detail page with time rail and working `#meeting-<id>` deep links | ✅ Complete |
 | Complaint replies | `report_replies` fetched via the gateway; accordion chat view with `from_staff` styling and author attribution | ✅ Complete |
 | Complaint cards | 2-column responsive grid; icon pills for reference / department / issue type / priority / area / channel | ✅ Complete |
+| Councillor identity | `UserProfile` gains `political_party`, `representation` (ward\|pr), `pr_seat`, `ward_code` from the MP312 gazette; PR-seat check constraint; party is a plain column, never a Group | ✅ Complete |
+| Unique identity data | `cell_number` + `employee_number` unique; `email` uniquely indexed case-insensitively via partial index (`WHERE email <> ''`); absence stored as `NULL` so many users may omit them | ✅ Complete |
+| Optional identity at signup | `email`, `cell_number`, `employee_number` are optional on `POST /api/access/users/`; `first_name` / `last_name` accepted | ✅ Complete |
+| Roster import | `manage.py import_councillors` (MP312 CSV, idempotent, `--dry-run`/`--update-existing`/`--group`); `manage.py backfill_identity_data` for NULL placeholders | ✅ Complete |
+| SSO gating | Public `GET /api/auth/config/`; login page shows the SSO button only when OIDC is configured. Authentik deferred, not deleted | ✅ Complete |
+| Default password | `settings.DEFAULT_NEW_USER_PASSWORD` (env-overridable) = `#ECOP26-31`; forced change on first login | ✅ Complete |
 
 ### Running Services
 
@@ -458,6 +464,8 @@ Key behaviours:
 | **6. Preview** | Preview component (pdf/img/audio/video) | PDFs preview inline, mp3 plays |
 | **7. Admin stats** | Statistics pages + Django admin reports | Upload/download logs visible with filters |
 | **8. Hardening** | Permissions polish, seed data, Docker media volume, docs | Full flow works in Docker |
+| **9. Mobile & polish** | Off-canvas nav, calendar redesign, recursive counts, complaint replies | Usable on a phone; counts correct at any depth |
+| **10. Councillor identity** | Gazette fields, unique identity data, roster import, SSO gating | 71 councillors importable; SSO hidden until configured |
 
 ---
 
@@ -472,6 +480,14 @@ Key behaviours:
   than Django.
 - Seed: management command `seed_portal` creating groups (Councillors,
   TopManagement, Admin), sample categories/files, and a superuser.
+- **CORS / hosts**: `ALLOWED_HOSTS` and `CORS_ALLOWED_ORIGINS` must include the
+  LAN address the frontend is served from (`http://172.20.17.16:3002`), or API
+  calls fail with 502/401 from other devices.
+- **PM2**: `ecosystem.config.js` and `python/start_django.sh` are **gitignored**
+  — every environment supplies its own. PM2 cannot execute script paths that
+  contain spaces, which is why the launcher sits at a space-free path.
+- **Password hashing / JWT**: `SECRET_KEY` shorter than 32 bytes triggers an
+  `InsecureKeyLengthWarning` from PyJWT — set a longer key in production.
 
 ### Git repositories & branches
 
@@ -648,6 +664,44 @@ flowchart TD
   only after the §6.3 discovery gate confirms the CMS supports OIDC.
 - **Phase 2 is still required** regardless — the gateway is needed for
   complaint data either way.
+
+**Status (2026-11-25): SSO is currently DISABLED — deferred, not removed.**
+
+The integration code is complete and dormant; nothing was deleted, because
+re-enabling is cheaper than re-implementing and the §6.6 decision still stands.
+
+| Piece | State |
+|---|---|
+| `accounts/authentik.py`, `oidc.py`, `oidc_views.py` | Present, wired into `AUTHENTICATION_BACKENDS` |
+| Provisioning signal | No-ops when `AUTHENTIK_ADMIN_TOKEN` is absent (logs a skip) |
+| `OIDC_ISSUER` / `OIDC_CLIENT_ID` | Empty → OIDC endpoints resolve to `''` |
+| Login page SSO button | **Hidden** unless the backend reports it configured |
+| Authentik container | May be stopped — that is the free "off switch" |
+
+Discovery endpoint (public, unauthenticated):
+
+```
+GET /api/auth/config/   →   {"sso_enabled": false, "sso_login_url": null}
+```
+
+`sso_enabled` requires **both** `OIDC_ISSUER` and `OIDC_CLIENT_ID`; a
+half-configured provider counts as disabled, because an issuer without a client
+id builds a redirect that fails at the IdP.
+
+**To re-enable** — set the two env vars and restart Django. No frontend
+rebuild, no code change; a `NEXT_PUBLIC_*` flag was deliberately avoided
+because those are baked in at build time:
+
+```bash
+OIDC_ISSUER=http://localhost:9080/application/o/council-portal/
+OIDC_CLIENT_ID=<client-id>
+# then
+python manage.py provision_authentik_users
+```
+
+**Why defer:** no CMS OIDC support is confirmed yet (§6.3 hard gate), and the
+portal's own password auth plus forced first-login change is sufficient for
+onboarding the gazetted roster today.
 
 ### 6.7 Complaints ↔ councillor association — ward is the join key
 
@@ -842,8 +896,30 @@ trigger is chosen later.
 
 ## 8. Immediate Next Steps
 
-1. **Meeting Archive v1** — implement §7 (fields, folder creation, ACL copy, link, guards).
-2. **Production Docker** — fix the frontend image build (pnpm build-script approval) and run `docker compose up -d --build`.
-3. **CI/CD** — GitHub Actions running `python manage.py test` and the Next.js build.
-4. **S3 storage** — swap local media for `django-storages` + `boto3` when needed (also unblocks §7.4.6).
-5. **Complaints write-back** — optional, per §6.3 Phase 4.
+1. **Seed the councillor roster** — `tmp/MP312.csv` is ready (71 rows, wards 1–36
+   contiguous). Back up the database first, then:
+   ```bash
+   cp python/db.sqlite3 python/db.sqlite3.pre-seed
+   python manage.py import_councillors ../tmp/MP312.csv --group Councillors --dry-run
+   python manage.py import_councillors ../tmp/MP312.csv --group Councillors
+   ```
+   Remember: Authentik provisioning is inactive (no token), so these accounts are
+   Django-only until `provision_authentik_users` is run.
+2. **Meeting Archive v1** — implement §7 (fields, folder creation, ACL copy, link, guards).
+3. **Production Docker** — fix the frontend image build (pnpm build-script approval) and run `docker compose up -d --build`.
+4. **CI/CD** — GitHub Actions running `python manage.py test` and the Next.js build.
+5. **S3 storage** — swap local media for `django-storages` + `boto3` when needed (also unblocks §7.4.6).
+6. **Complaints write-back** — optional, per §6.3 Phase 4.
+7. **Deferred:** SSO re-enablement (§6.6, waiting on CMS OIDC support) and
+   per-reply author names in the complaint thread (needs the correct PostgREST
+   relation; `user(full_name)` returned 400).
+
+### Known gaps
+
+| Gap | Impact | Notes |
+|---|---|---|
+| Councillor emails absent | No password-reset email possible | Join against an HR roster on `full_name` |
+| 35 PR councillors have `ward = NULL` | They see **no** complaints | Correct per §6.7 — complaints key on ward |
+| `author_name` in replies | Shows `Staff` / `User`, not a real name | CMS `select` exposes no author |
+| Frontend password constant | Duplicates `settings.DEFAULT_NEW_USER_PASSWORD` | Backend is authoritative; keep in sync |
+| Backfill placeholders | Sequential and guessable (`0820000011` = user 11) | Dev/staging only — replace with real numbers |

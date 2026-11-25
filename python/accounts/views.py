@@ -189,6 +189,29 @@ class UserAccessViewSet(mixins.ListModelMixin,
         return super().update(request, *args, **kwargs)
 
 
+# ─── Public config ──────────────────────────────────────────
+
+@api_view(['GET'])
+@permission_classes([permissions.AllowAny])
+def auth_config(request):
+    """Capabilities the login screen needs to know before authenticating.
+
+    Kept server-side so the SSO button can be switched on per environment by
+    setting OIDC_ISSUER / OIDC_CLIENT_ID — no frontend rebuild required. A
+    NEXT_PUBLIC_* flag would be baked in at build time and could not follow the
+    backend's configuration.
+    """
+    sso_enabled = bool(settings.OIDC_ISSUER and settings.OIDC_CLIENT_ID)
+    return Response({
+        'sso_enabled': sso_enabled,
+        # Only advertise the path when it will actually resolve.
+        'sso_login_url': (
+            request.build_absolute_uri('/api/auth/oidc/authenticate/')
+            if sso_enabled else None
+        ),
+    })
+
+
 # ─── Own profile ────────────────────────────────────────────
 
 @api_view(['GET', 'PATCH'])

@@ -1,9 +1,9 @@
 # ECOP — Emalahleni Council Portal — Development Summary
 
-**Date:** November 1, 2026  
+**Date:** 25 November 2026  
 **Project:** ECOP — Emalahleni Council Portal  
 **Developer:** GitHub Copilot (Poolside: Laguna S 2.1)  
-**Status:** MVP + Access Control, Profiles & Calendar Complete — Ready for Production Hardening
+**Status:** MVP + Access Control, Profiles, Calendar, Mobile UI & Councillor Identity — Ready for Production Hardening
 
 ---
 
@@ -33,8 +33,8 @@ Built a full-stack Digital Asset Management (DAM) platform from scratch, migrati
 | **Frontend** | Next.js 16 (Turbopack), React 19, TypeScript, Tailwind CSS v4, shadcn/ui, lucide-react, Radix UI |
 | **Backend** | Django 6.1, Django REST Framework, djangorestframework-simplejwt, django-filter, django-cors-headers, python-magic |
 | **Database** | PostgreSQL 15 (Docker), SQLite fallback (dev) |
-| **Auth** | JWT tokens (Simple JWT) with session auth fallback |
-| **Infrastructure** | Docker Compose (web, db, adminer, frontend), named volumes |
+| **Auth** | JWT tokens (Simple JWT) with session auth fallback; Authentik OIDC integration present but **disabled** (§6.6) |
+| **Infrastructure** | Docker Compose (web, db, adminer, frontend), named volumes; PM2 for local process supervision (config gitignored) |
 
 ---
 
@@ -187,7 +187,7 @@ Both servers are currently running:
 
 ---
 
-## 5. Next Steps (Updated 1 November 2026)
+## 5. Next Steps (Updated 25 November 2026)
 
 ### Completed: Multi-Tenancy (Accounts App)
 Delivered: `Team`, `Membership`, and `UserProfile` models; team-scoped categories/files; active-workspace switching; team member management UI.
@@ -195,28 +195,53 @@ Delivered: `Team`, `Membership`, and `UserProfile` models; team-scoped categorie
 ### Completed: Client Sharing
 Delivered: `SharedLink` (expiry + PBKDF2 password), public `/share/<token>` page, `/dashboard/shared` management, `share_files` capability, and per-category `is_shareable` policy that blocks confidential folders.
 
-### Priority 1: Production Docker Deployment
+### Completed: Councillor roster import (see §9)
+Delivered: gazette identity fields, unique `cell_number` / `employee_number` / `email`, `import_councillors`, `backfill_identity_data`, and `tmp/MP312.csv` (71 councillors).
+
+### Completed: SSO gating (see §9)
+Delivered: public `GET /api/auth/config/`; the login page shows the SSO button only when OIDC is configured. Authentik is deferred, not removed.
+
+### Priority 1: Seed the councillor roster
+```bash
+cp python/db.sqlite3 python/db.sqlite3.pre-seed
+cd python
+python manage.py import_councillors ../tmp/MP312.csv --group Councillors --dry-run
+python manage.py import_councillors ../tmp/MP312.csv --group Councillors
+```
+- 71 users, forced password change on first login
+- Emails absent — to be joined from an HR roster later
+- Authentik provisioning is inactive until `AUTHENTIK_ADMIN_TOKEN` is set
+
+### Priority 2: Production Docker Deployment
 ```bash
 cd python/
 docker compose up -d --build
 ```
 - Fix the `frontend` image build (`pnpm` build-script approval for `unrs-resolver`)
 - Switch from SQLite to PostgreSQL for production
-- Set `DEBUG=0`, configure `ALLOWED_HOSTS`
+- Set `DEBUG=0`, configure `ALLOWED_HOSTS` and `CORS_ALLOWED_ORIGINS`
 - Add nginx for media serving with `X-Accel-Redirect`
+- Supply `ecosystem.config.js` per environment — it is gitignored on purpose
 
-### Priority 2: S3 Storage
+### Priority 3: S3 Storage
 - Add `django-storages` + `boto3`; swap local media for S3.
+- Prerequisite for Meeting Archive immutability (`PORTAL_PLAN.md` §7.4.6)
 
-### Priority 3: CI/CD
-- GitHub Actions: run the 87-test backend suite and the Next.js build on every push.
+### Priority 4: Meeting Archive
+- Per-meeting permanent resource folders — design agreed in `PORTAL_PLAN.md` §7
+- v1: `archive_category` + `is_archive`, folder on meeting creation, archive link on past meetings, deletion guards, **ACL copy**
 
-### Priority 4: Advanced Features
+### Priority 5: CI/CD
+- GitHub Actions: run the backend suite and the Next.js build on every push.
+
+### Priority 6: Advanced Features
 - Activity feed (audit trail of all actions)
 - Bulk upload + ZIP extraction
 - File versioning (history of replaced files)
 - Search (full-text search via PostgreSQL `tsvector`)
 - Real-time notifications (WebSocket or polling)
+- Complaint write-back to the CMS (`PORTAL_PLAN.md` §6.3 Phase 4)
+- Per-reply author names in the complaint thread (needs the correct PostgREST relation)
 
 ---
 
@@ -326,10 +351,77 @@ curl -X POST http://127.0.0.1:8000/api/files/upload/ \
 | Calendar (standalone) | http://localhost:3000/calendar |
 | Backend API | http://localhost:8000 |
 | Django admin | http://localhost:8000/admin/ (admin / admin123) |
+| Auth config (public) | http://localhost:8000/api/auth/config/ |
+
+> Ports drift in practice: the frontend reads `NEXT_PUBLIC_API_PORT` from
+> `frontend/.env.local`, and Django has been run on both 8000 and 8001 during
+> debugging. Confirm with `lsof -i :8000` before assuming.
 
 ---
 
-## 9. Repository & Branching
+## 9. Progress Update — 25 November 2026
+
+### Resource & file UX (shipped)
+- Naming aligned across UI and admin: **Resource** (was Collection/Documents), **File** (was Asset), **Subfolder** (was Subcategory)
+- Multi-file upload with drag-and-drop; subfolder creation from any category page
+- Multi-select with bulk delete; per-file delete on both grid and table views
+- `Category.total_file_count` — parent folders now report files held in their subfolders instead of `0`
+- Fixed: bulk delete was deleting the parent category; the header button now calls `removeFiles`
+
+### Mobile-first UI (shipped)
+- Sidebar became an off-canvas drawer below `md` — hamburger in the header, overlay, close button, auto-close on nav click; inline on desktop
+- `AppHeader.onMenuClick` is optional so the standalone `/calendar` page still renders
+- Complaint cards collapse to one column on phones, two from `sm`
+- Dashboard **Upcoming meetings** card redesigned: date chips, relative-day labels (`Today` / `Tomorrow` / `In 3 days`), `Next` and `Mine` badges, skeleton and empty states
+
+### Calendar redesign (shipped)
+- Days **with meetings** are visually distinct: primary tint, bold day number, count badge on mobile, `Includes yours` stronger tint, and a legend explaining all three states
+- Compact mobile grid plus a per-day agenda panel (the month grid is too small for detail on a phone)
+- Segmented `My meetings / All meetings` control replaces two competing buttons
+- Day-detail page (`/dashboard/calendar/[date]`) restyled to match: date chip, `‹ Today ›` day navigation, time rail, attendee pills
+- Fixed: `#meeting-<id>` deep links never scrolled — meetings arrive client-side, so the anchor is now replayed after the data lands
+
+### Complaint reply thread (shipped)
+- `ReportReplySerializer` + `GET /api/complaints/<id>/replies/` — an `@action` on a `ComplaintViewSet` registered with a `DefaultRouter` (a plain `path()` 404s)
+- `client.py::fetch_replies_for_complaint()` reads `report_replies` ordered `created_at asc`
+- Accordion chat view: staff replies right-aligned with primary branding, others left-aligned
+- Complaint cards now show icon pills for reference / department / issue type / priority / area / channel
+- Open: `author_name` resolves to `Staff` / `User`; the CMS exposes no per-reply author in the current `select`
+
+### Councillor identity & unique data (shipped)
+- New `UserProfile` fields from the MP312 gazette: `political_party`, `representation` (ward|pr), `pr_seat`, `ward_code`
+- `CheckConstraint` blocks a PR seat number on a ward councillor
+- Party is a **plain column, never a Django Group** — groups are content-role ACL carriers
+- `cell_number` and `employee_number` are unique; `email` is uniquely indexed case-insensitively via a **partial index** (`WHERE email <> ''`)
+- Absence is stored as `NULL`, not `''` — SQL treats NULLs as distinct, so any number of users may omit these fields
+- `email`, `cell_number` and `employee_number` are now **optional at user creation**
+- `manage.py import_councillors` — idempotent import of the gazette CSV (`--dry-run`, `--update-existing`, `--group`)
+- `manage.py backfill_identity_data` — fills NULL identity fields with unique placeholders; `--username-from-cell` requires `--only`
+
+### Roster data
+- `tmp/MP312.csv`: **71 councillors** parsed from the gazette — 36 ward, 35 PR, wards **1–36 contiguous**
+- Ward numbers align with `UserProfile.ward`, the join key to complaints (`PORTAL_PLAN.md` §6.7)
+
+### SSO gating (shipped)
+- New public `GET /api/auth/config/` returns `{sso_enabled, sso_login_url}`
+- The login page shows **Continue with Council SSO** only when OIDC is actually configured
+- Re-enabling later needs two env vars and a restart — **no frontend rebuild**
+- Authentik code retained; provisioning already no-ops when the token is absent
+
+### Infrastructure
+- PM2 config (`ecosystem.config.js`, `python/start_django.sh`) is now **gitignored** — each environment supplies its own
+  - PM2 cannot execute script paths containing spaces; the launcher lives at a space-free path
+- `.gitignore` also covers `ecosystem.config.*.js` and `.pm2/`
+
+### Quality
+- **57 backend tests** passing (was 87 across all apps; accounts suite grew to 57)
+- New tests: auth config states, cell/email uniqueness, re-saving your own values, blank values coexisting as `NULL`
+- Frontend `pnpm build` and `pnpm lint` clean
+- Fixed: a browser extension injecting attributes onto `<html>` caused a hydration warning on every route — resolved with scoped `suppressHydrationWarning`
+
+---
+
+## 10. Repository & Branching
 
 The project uses two Git repositories with matching branch models:
 
@@ -341,8 +433,11 @@ The project uses two Git repositories with matching branch models:
 - `main` = production-ready; `staging` = pre-production integration.
 - The parent repo pins an exact frontend commit via the submodule, so each
   parent branch fully defines its backend + UI deployment.
-- Current state: both parent branches pin frontend `50703f6`; the frontend
-  `main` and `staging` branches are also at `50703f6`.
+- Read the live pin with `git submodule status` — a hash written into a document
+  goes stale on every frontend commit. Pushing a frontend commit does **not**
+  move the parent pointer; that needs a separate `git add frontend && git commit`.
+- PM2 config is intentionally **not** committed (see §9). Each environment
+  supplies its own `ecosystem.config.js`.
 
 ### Frontend change flow (staging)
 ```bash
