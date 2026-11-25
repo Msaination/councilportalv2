@@ -1,5 +1,7 @@
 """Serializers for committees, memberships, and the active workspace."""
 
+import re
+
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Permission
 from django.contrib.auth.password_validation import validate_password
@@ -20,12 +22,68 @@ CAPABILITY_PERMISSIONS = {
 
 
 class MembershipSerializer(serializers.ModelSerializer):
+    """A committee member as shown on the members table.
+
+    Councillors are identified by name, party, and ward rather than by
+    username — usernames are login handles (britsajj), not identities.
+    """
     user_id = serializers.IntegerField(source='user.id', read_only=True)
     username = serializers.CharField(source='user.username', read_only=True)
+    last_name = serializers.CharField(source='user.last_name', read_only=True)
+    initials = serializers.SerializerMethodField()
+    display_name = serializers.SerializerMethodField()
+    party = serializers.SerializerMethodField()
+    party_abbreviation = serializers.SerializerMethodField()
+    capacity = serializers.SerializerMethodField()
+    ward = serializers.SerializerMethodField()
+    ward_code = serializers.SerializerMethodField()
+    cell_number = serializers.SerializerMethodField()
 
     class Meta:
         model = Membership
-        fields = ('user_id', 'username', 'role', 'joined_at')
+        fields = ('user_id', 'username', 'last_name', 'initials',
+                  'display_name', 'party', 'party_abbreviation', 'capacity',
+                  'ward', 'ward_code', 'cell_number', 'role', 'joined_at')
+
+    def _profile(self, obj):
+        return getattr(obj.user, 'profile', None)
+
+    def get_initials(self, obj):
+        """First letters of each given name: 'ANTHONIE JOHANNES JACOB' -> AJJ."""
+        words = re.findall(r'[A-Za-z]+', obj.user.first_name or '')
+        return ''.join(word[0].upper() for word in words)
+
+    def get_display_name(self, obj):
+        """'Brits, A.J.J.' — surname first, per the councillor roster."""
+        surname = (obj.user.last_name or '').strip()
+        initials = self.get_initials(obj)
+        if surname and initials:
+            return f'{surname}, {".".join(initials)}.'
+        return surname or obj.user.username
+
+    def get_party(self, obj):
+        profile = self._profile(obj)
+        return (profile.political_party if profile else '') or ''
+
+    def get_party_abbreviation(self, obj):
+        profile = self._profile(obj)
+        return profile.party_abbreviation if profile else ''
+
+    def get_capacity(self, obj):
+        profile = self._profile(obj)
+        return (profile.capacity if profile else '') or ''
+
+    def get_ward(self, obj):
+        profile = self._profile(obj)
+        return profile.ward if profile else None
+
+    def get_ward_code(self, obj):
+        profile = self._profile(obj)
+        return (profile.ward_code if profile else '') or ''
+
+    def get_cell_number(self, obj):
+        profile = self._profile(obj)
+        return (profile.cell_number if profile else '') or ''
 
 
 class TeamSerializer(serializers.ModelSerializer):

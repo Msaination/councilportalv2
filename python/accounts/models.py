@@ -15,6 +15,42 @@ EMPLOYEE_NUMBER_VALIDATOR = RegexValidator(
     message='Employee number must start with S and be at most 7 characters.',
 )
 
+# Gazette party names that do not abbreviate cleanly from their initials,
+# either because the initials are already taken or because the gazette
+# spells the party out in full. Anything absent falls back to initials.
+PARTY_ABBREVIATIONS = {
+    'AFRICAN NATIONAL CONGRESS': 'ANC',
+    'ACTIONSA': 'ACT',
+    'DEMOCRATIC ALLIANCE': 'DA',
+    'UMKHONTO WESIZWE PARTY': 'MK',
+    'ECONOMIC FREEDOM FIGHTERS': 'EFF',
+    'VRYHEIDSFRONT PLUS | FREEDOM FRONT PLUS': 'VF+',
+    'SERVICE DELIVERY PARTY': 'SDP',
+    'SOUTH AFRICAN COMMUNIST PARTY': 'SACP',
+    'LABOUR PARTY OF SOUTH AFRICA': 'LP',
+    'INKATHA FREEDOM PARTY': 'IFP',
+    'AFRIKA MAYIBUYE MOVEMENT': 'ATM',
+}
+
+# Words that carry no distinguishing meaning in a party name.
+_PARTY_STOPWORDS = frozenset({'OF', 'THE', 'AND', 'A', 'FOR', 'SOUTH'})
+
+
+def abbreviate_party(name):
+    """Short form of a gazetted party name, e.g. 'ANC', 'VF+', 'SACP'.
+
+    Known parties use the curated abbreviation; anything else is built from
+    the initials of its significant words so new parties need no code change.
+    """
+    normalised = ' '.join((name or '').split()).upper()
+    if not normalised:
+        return ''
+    known = PARTY_ABBREVIATIONS.get(normalised)
+    if known:
+        return known
+    words = [w for w in normalised.split() if w not in _PARTY_STOPWORDS]
+    return ''.join(w[0] for w in words)
+
 
 class Team(models.Model):
     """A committee workspace whose resource categories and files are isolated."""
@@ -142,6 +178,10 @@ class UserProfile(models.Model):
         help_text='IEC ward code from the gazette, e.g. "83102001" '
                   '(audit / re-import key only).',
     )
+    capacity = models.CharField(
+        max_length=20, blank=True,
+        help_text='Gazetted capacity, e.g. "LC" (local councillor).',
+    )
 
     class Meta:
         verbose_name = 'User profile'
@@ -175,6 +215,11 @@ class UserProfile(models.Model):
 
     def __str__(self):
         return f'Profile of {self.user}'
+
+    @property
+    def party_abbreviation(self):
+        """Short party form for compact tables, e.g. 'ANC'."""
+        return abbreviate_party(self.political_party)
 
     def save(self, *args, **kwargs):
         # `unique` columns together with optional values would clash on ''

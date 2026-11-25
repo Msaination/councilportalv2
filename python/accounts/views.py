@@ -44,7 +44,9 @@ class TeamViewSet(viewsets.ModelViewSet):
         return super().get_permissions()
 
     def get_queryset(self):
-        qs = Team.objects.prefetch_related('memberships__user')
+        qs = Team.objects.prefetch_related(
+            'memberships__user__profile',
+        )
         if self.request.user.is_staff:
             return qs
         return qs.filter(memberships__user=self.request.user).distinct()

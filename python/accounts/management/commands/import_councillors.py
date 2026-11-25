@@ -61,6 +61,7 @@ class Row:
     ward_number: int | None
     pr_seat: int | None
     ward_code: str
+    capacity: str = ''
 
 
 def norm(value: str | None) -> str:
@@ -253,6 +254,7 @@ class Command(BaseCommand):
                     ward_number=ward_number if representation == 'ward' else None,
                     pr_seat=pr_seat if representation == 'pr' else None,
                     ward_code=(raw.get('ward_code') or '').strip(),
+                    capacity=(raw.get('capacity') or '').strip().upper(),
                 ))
 
         return rows, errors
@@ -273,10 +275,11 @@ class Command(BaseCommand):
         profile.ward = row.ward_number
         profile.pr_seat = row.pr_seat
         profile.ward_code = row.ward_code
+        profile.capacity = row.capacity
         profile.must_change_password = True
         profile.save(update_fields=[
             'political_party', 'representation', 'ward',
-            'pr_seat', 'ward_code', 'must_change_password',
+            'pr_seat', 'ward_code', 'capacity', 'must_change_password',
         ])
 
     def _rename(self, user, row: Row, seen: set[str]) -> int:

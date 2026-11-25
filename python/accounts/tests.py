@@ -9,14 +9,16 @@ import requests as requests_lib
 from django.conf import settings
 from django.contrib.auth.models import Permission, User
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.test import override_settings
+from django.test import TestCase, override_settings
 from PIL import Image
 from rest_framework.test import APITestCase
 
 from documents.models import Category, StoredFile
 
 from .authentik import provision_user
-from .models import Membership, Team, UserProfile, get_active_team
+from .models import (
+    Membership, Team, UserProfile, abbreviate_party, get_active_team,
+)
 from .oidc import CouncilPortalOIDCBackend
 
 TEST_MEDIA_ROOT = tempfile.mkdtemp()
@@ -236,6 +238,91 @@ class TeamAdminInlineTests(TeamApiTestCase):
         team_admin.save_model(request, team, form=None, change=False)
 
         self.assertEqual(team.memberships.count(), 1)
+
+
+class MembershipSerializerTests(TeamApiTestCase):
+    """The members table identifies councillors by name, party, and ward."""
+
+    def setUp(self):
+        super().setUp()
+        self.team = Team.objects.create(name='Ethics', created_by=self.owner)
+        self.councillor = make_user('britsajj')
+        self.councillor.first_name = 'Anthonie Johannes Jacob'
+        self.councillor.last_name = 'Brits'
+        self.councillor.save()
+
+        profile = self.councillor.profile
+        profile.political_party = 'DEMOCRATIC ALLIANCE'
+        profile.representation = 'ward'
+        profile.ward = 22
+        profile.ward_code = '83102022'
+        profile.capacity = 'LC'
+        profile.cell_number = '0738003355'
+        profile.save()
+
+        Membership.objects.create(
+            team=self.team, user=self.councillor,
+            role=Membership.Role.MEMBER,
+        )
+
+    def _member(self):
+        self.client.force_authenticate(self.admin)
+        response = self.client.get('/api/teams/ethics/')
+        self.assertEqual(response.status_code, 200)
+        return response.data['members'][0]
+
+    def test_member_exposes_roster_fields(self):
+        member = self._member()
+        self.assertEqual(member['last_name'], 'Brits')
+        self.assertEqual(member['initials'], 'AJJ')
+        self.assertEqual(member['display_name'], 'Brits, A.J.J.')
+        self.assertEqual(member['party'], 'DEMOCRATIC ALLIANCE')
+        self.assertEqual(member['party_abbreviation'], 'DA')
+        self.assertEqual(member['capacity'], 'LC')
+        self.assertEqual(member['ward'], 22)
+        self.assertEqual(member['ward_code'], '83102022')
+        self.assertEqual(member['cell_number'], '0738003355')
+
+    def test_missing_profile_data_degrades_to_empty_values(self):
+        plain = make_user('plainmember')
+        Membership.objects.create(
+            team=self.team, user=plain, role=Membership.Role.MEMBER,
+        )
+        self.client.force_authenticate(self.admin)
+        response = self.client.get('/api/teams/ethics/')
+        row = next(m for m in response.data['members']
+                   if m['username'] == 'plainmember')
+
+        self.assertEqual(row['party'], '')
+        self.assertEqual(row['party_abbreviation'], '')
+        self.assertEqual(row['capacity'], '')
+        self.assertIsNone(row['ward'])
+        self.assertEqual(row['cell_number'], '')
+        # Falls back to the username when no surname is recorded.
+        self.assertEqual(row['display_name'], 'plainmember')
+
+
+class PartyAbbreviationTests(TestCase):
+    def test_known_parties_use_curated_abbreviations(self):
+        expected = {
+            'AFRICAN NATIONAL CONGRESS': 'ANC',
+            'DEMOCRATIC ALLIANCE': 'DA',
+            'UMKHONTO WESIZWE PARTY': 'MK',
+            'ECONOMIC FREEDOM FIGHTERS': 'EFF',
+            'VRYHEIDSFRONT PLUS | FREEDOM FRONT PLUS': 'VF+',
+            'ACTIONSA': 'ACT',
+        }
+        for party, abbreviation in expected.items():
+            with self.subTest(party=party):
+                self.assertEqual(abbreviate_party(party), abbreviation)
+
+    def test_unknown_party_falls_back_to_initials(self):
+        self.assertEqual(
+            abbreviate_party('United Democratic Movement'), 'UDM')
+
+    def test_blank_party_is_empty(self):
+        self.assertEqual(abbreviate_party(''), '')
+        self.assertEqual(abbreviate_party(None), '')
 
 
 class CapabilityTests(TeamApiTestCase):
